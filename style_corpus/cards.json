@@ -5,6 +5,7 @@
     {
       "id": "user_ref_cluster",
       "lang": "zh",
+      "register": "modern",
       "source": "诗.docx",
       "breath": "short-long alternating; many 2-6 char lines; occasional long cascade",
       "image_clusters": ["光影", "星月", "黑暗", "时间之河", "心脏/脉搏", "梦乡", "窗门内外"],
@@ -17,6 +18,7 @@
     {
       "id": "misty_montage",
       "lang": "zh",
+      "register": "modern",
       "source": "朦胧诗蒙太奇 + 唐诗并置脱节（分析摘要）",
       "breath": "短行跳跃；意象撞击后留白",
       "image_clusters": ["对立象征群", "自然正面 vs 锈蚀否定物"],
@@ -29,6 +31,7 @@
     {
       "id": "fairy_clear",
       "lang": "zh",
+      "register": "modern",
       "source": "顾城式童话透明意象（分析摘要）",
       "breath": "轻、短、通透",
       "image_clusters": ["自然细物", "幻想与现实交界"],
@@ -41,6 +44,7 @@
     {
       "id": "ritual_land",
       "lang": "zh",
+      "register": "mixed",
       "source": "海子式大地/仪式短句（分析摘要）",
       "breath": "短句排比可有，但需变奏避免同构连发",
       "image_clusters": ["土地", "麦地", "太阳", "村庄", "河流"],
@@ -53,18 +57,33 @@
     {
       "id": "tang_breath",
       "lang": "zh",
-      "source": "近体诗节奏感（分析摘要，非格律硬套）",
-      "breath": "四/五/七言尺度的呼吸参考，自由诗可借其顿挫",
-      "image_clusters": ["月", "江", "关山", "雁"],
-      "verb_mode": "单字动词有力",
-      "devices": ["景→情层递", "对仗意而不硬对"],
-      "bans_observed": ["堆砌典故说明书"],
-      "prompt_snippet": "借近体顿挫与景情层递，不硬填格律；单字动词有力，忌典故说明书。",
-      "prompt_snippet_en": "Borrow classical breath and scene-to-feeling layering without forced meter; strong verbs; no allusion lectures."
+      "register": "classical",
+      "source": "近体诗节奏感（分析摘要）",
+      "breath": "五/七言顿挫；一句一景或景→情",
+      "image_clusters": ["月", "江", "关山", "雁", "霜", "灯", "竹", "笛", "渡", "窗"],
+      "verb_mode": "单字动词有力：照/敲/断/凝/卷/落/拂",
+      "devices": ["景→情层递", "对仗意而不硬对", "一句一锤"],
+      "bans_observed": ["堆砌典故说明书", "白话长定语", "现代心理独白", "自由诗短行拼贴"],
+      "prompt_snippet": "近体语体：单字锤炼、景情层递；格律时严格五/七言一字一槽；忌典故说明书与现代自由诗口语。",
+      "prompt_snippet_en": "Classical regulated diction: one-char verbs, scene-to-feeling; exact 5/7 meter when required; no allusion lectures or modern free-verse voice."
+    },
+    {
+      "id": "classical_jueju",
+      "lang": "zh",
+      "register": "classical",
+      "source": "绝句/律诗语体摘要",
+      "breath": "四句或八句收束；中两联可对而不必工",
+      "image_clusters": ["寒江", "孤鸿", "残灯", "暮云", "野渡", "戍楼"],
+      "verb_mode": "凝/照/断/尽/敲/对",
+      "devices": ["起承转合", "末句收束余味"],
+      "bans_observed": ["现代自由诗换行癖", "多字白话词组灌槽", "心脏/人儿呦等当代词"],
+      "prompt_snippet": "绝句/律诗：起承转合，末句留白；用古典景物与单字动词；禁止现代诗分行与当代心理词。",
+      "prompt_snippet_en": "Jueju/lüshi arc; classical scenes and monosyllabic verbs; ban modern lineation and contemporary psych-diction."
     },
     {
       "id": "en_imagist",
       "lang": "en",
+      "register": "modern",
       "source": "Imagist / concise modern lyric traits",
       "breath": "short lines; concrete nouns; cut abstract sermon",
       "image_clusters": ["weather", "room objects", "body", "street light"],
@@ -77,6 +96,7 @@
     {
       "id": "en_breath_confessional",
       "lang": "en",
+      "register": "modern",
       "source": "modern confessional breath (craft summary)",
       "breath": "uneven line lengths; questions allowed; climax imperative rare",
       "image_clusters": ["window", "pulse", "night road", "water"],

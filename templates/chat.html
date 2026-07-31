@@ -28,7 +28,7 @@
 
   <div class="gpt-main-col" id="gpt-main-col">
     <div class="stage-rail {% if stage == 'chat' %}is-idle{% endif %}" id="stage-rail">
-      {% for key in ['chat','examples','structure','symbols','verbs','final'] %}
+      {% for key in ['chat','examples','structure','symbols','verbs','link','final'] %}
       <span class="stage-dot {% if stage == key %}on{% endif %}" data-stage="{{ key }}">{{ ui.stages[key] }}</span>
       {% endfor %}
     </div>

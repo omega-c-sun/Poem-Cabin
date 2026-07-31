@@ -194,9 +194,99 @@ def _blob_from_session(session, extra_user=None):
     return '\n'.join(bits).lower()
 
 
+def split_zh_verse_lines(text):
+    """
+    Split classical Chinese verse into lines.
+    Handles both newlines and ，。； punctuation on a single line.
+    """
+    out = []
+    for ln in re.split(r'[\r\n]+', text or ''):
+        ln = (ln or '').strip()
+        if not ln:
+            continue
+        parts = re.split(r'[，。；、！？；;!?\u3002\uff0c]+', ln)
+        for p in parts:
+            p = p.strip()
+            if re.search(r'[\u4e00-\u9fffA-Za-z]', p):
+                out.append(p)
+    return out
+
+
+def infer_form_from_poem(poem_text):
+    """Infer regulated / fixed form from poem line count × chars."""
+    lines = split_zh_verse_lines(poem_text)
+    zh_lines = [ln for ln in lines if re.search(r'[\u4e00-\u9fff]', ln)]
+    if len(zh_lines) >= 4:
+        lens = [len(re.findall(r'[\u4e00-\u9fff]', ln)) for ln in zh_lines]
+        n = len(zh_lines)
+        if n == 8 and all(x == 5 for x in lens):
+            return dict(FORMS['wuyan_lushi'])
+        if n == 8 and all(x == 7 for x in lens):
+            return dict(FORMS['qiyan_lushi'])
+        if n == 4 and all(x == 5 for x in lens):
+            return dict(FORMS['wuyan_jueju'])
+        if n == 4 and all(x == 7 for x in lens):
+            return dict(FORMS['qiyan_jueju'])
+        # near-miss: 4 lines mostly 7 chars → 七绝
+        if n == 4 and sum(1 for x in lens if x == 7) >= 3:
+            return dict(FORMS['qiyan_jueju'])
+        if n == 4 and sum(1 for x in lens if x == 5) >= 3:
+            return dict(FORMS['wuyan_jueju'])
+        if n >= 7 and sum(1 for x in lens[:8] if x == 5) >= 6:
+            return dict(FORMS['wuyan_lushi'])
+        if n >= 7 and sum(1 for x in lens[:8] if x == 7) >= 6:
+            return dict(FORMS['qiyan_lushi'])
+    # English sonnet-ish
+    en_lines = [ln for ln in (poem_text or '').splitlines() if re.search(r'[A-Za-z]', ln)]
+    if len(en_lines) == 14:
+        return dict(FORMS['sonnet'])
+    return None
+
+
+def detect_explicit_form(blob):
+    """
+    Detect form from explicit user/card wording only (no lock, no weak aliases).
+    Priority: 七绝/五绝/七律/五律/sonnet… over bare 格律诗 / quatrain.
+    """
+    b = (blob or '').lower()
+    if not b.strip():
+        return None
+    # Chinese regulated — most specific first
+    if re.search(r'七言绝句|七绝|四句七言|每句\s*7\s*字|每句七字|7字绝句', b):
+        return dict(FORMS['qiyan_jueju'])
+    if re.search(r'五言绝句|五绝|四句五言|每句\s*5\s*字|每句五字|5字绝句', b):
+        return dict(FORMS['wuyan_jueju'])
+    if re.search(r'七言律诗|七律|八句七言', b):
+        return dict(FORMS['qiyan_lushi'])
+    if re.search(r'五言律诗|五律|八句五言|五言八句', b):
+        return dict(FORMS['wuyan_lushi'])
+    if re.search(r'绝句', b):
+        if '七言' in b or '七字' in b:
+            return dict(FORMS['qiyan_jueju'])
+        return dict(FORMS['wuyan_jueju'])
+    if re.search(r'格律诗|律诗', b):
+        if '七言' in b or '七字' in b:
+            return dict(FORMS['qiyan_lushi'])
+        return dict(FORMS['wuyan_lushi'])
+    if re.search(r'shakespearean\s+sonnet|莎体|英语十四行', b):
+        return dict(FORMS['shakespearean_sonnet'])
+    if re.search(r'petrarchan|彼特拉克|意体十四行', b):
+        return dict(FORMS['petrarchan_sonnet'])
+    if re.search(r'\bsonnet\b|十四行|商籁', b):
+        return dict(FORMS['sonnet'])
+    if re.search(r'\bhaiku\b|俳句', b):
+        return dict(FORMS['haiku'])
+    if re.search(r'\blimerick\b|五行打油', b):
+        return dict(FORMS['limerick'])
+    return None
+
+
+_WEAK_LOCKS = frozenset({'quatrain', 'couplet', 'free'})
+
+
 def detect_verse_form(session=None, extra_user=None, text=None):
     """
-    Return a form dict (from FORMS). Prefer locked stage_meta, then chat aliases.
+    Return a form dict (from FORMS). Explicit user/card names beat a weak prior lock.
     Falls back to free.
     """
     meta = {}
@@ -210,42 +300,61 @@ def detect_verse_form(session=None, extra_user=None, text=None):
                 meta = _db.loads(raw, {}) or {}
             except Exception:
                 meta = {}
-        # Prefer previously locked form so mid-pipeline never forgets sonnet
-        locked = meta.get('verse_form')
-        if locked and locked in FORMS and locked != 'free':
+
+    blob = (text or '')
+    if session is not None or extra_user:
+        blob = (_blob_from_session(session, extra_user) + '\n' + blob)
+    blob_l = blob.lower()
+
+    # 1) Explicit wording always wins (七言绝句 etc.) — even over wrong quatrain lock
+    explicit = detect_explicit_form(blob_l)
+    if explicit:
+        return explicit
+
+    # 2) Poem-shape from selected card / text
+    sel = meta.get('selected_example') if isinstance(meta, dict) else None
+    shape = None
+    if isinstance(sel, dict) and sel.get('poem'):
+        shape = infer_form_from_poem(sel.get('poem'))
+    if not shape and text:
+        shape = infer_form_from_poem(text)
+    if shape:
+        return shape
+
+    # 3) Honor lock unless it is a weak English alias that fights 格律 hints
+    locked = meta.get('verse_form') if isinstance(meta, dict) else None
+    if locked and locked in FORMS and locked != 'free':
+        if locked in _WEAK_LOCKS and re.search(r'格律|绝句|律诗|五言|七言', blob_l):
+            pass  # fall through — do not keep quatrain over 格律
+        else:
             return dict(FORMS[locked])
 
-    blob = (text or '').lower()
-    if session is not None or extra_user:
-        blob = (_blob_from_session(session, extra_user) + '\n' + blob).lower()
-
     # Heuristics for 格律诗 / 五言 from example cards
-    if re.search(r'八句五言|五言八句|〔五言〕.*〔五言〕', blob) or (
-            blob.count('〔五言〕') >= 4 or blob.count('[五言]') >= 4):
+    if re.search(r'八句五言|五言八句|〔五言〕.*〔五言〕', blob_l) or (
+            blob_l.count('〔五言〕') >= 4 or blob_l.count('[五言]') >= 4):
         return dict(FORMS['wuyan_lushi'])
-    if re.search(r'八句七言|七言八句|〔七言〕', blob):
+    if re.search(r'八句七言|七言八句|〔七言〕', blob_l):
         return dict(FORMS['qiyan_lushi'])
-    if re.search(r'四句五言', blob):
+    if re.search(r'四句五言', blob_l):
         return dict(FORMS['wuyan_jueju'])
-    if re.search(r'四句七言', blob):
+    if re.search(r'四句七言', blob_l):
         return dict(FORMS['qiyan_jueju'])
-    # bare 格律诗 / 律诗 → default 五言律诗
-    if '七言律诗' in blob or '七律' in blob or '八句七言' in blob:
+    if '七言律诗' in blob_l or '七律' in blob_l or '八句七言' in blob_l:
         return dict(FORMS['qiyan_lushi'])
-    if '五言律诗' in blob or '五律' in blob or '八句五言' in blob:
+    if '五言律诗' in blob_l or '五律' in blob_l or '八句五言' in blob_l:
         return dict(FORMS['wuyan_lushi'])
-    if '格律诗' in blob or '律诗' in blob:
-        if '七言' in blob:
+    if '格律诗' in blob_l or '律诗' in blob_l:
+        if '七言' in blob_l:
             return dict(FORMS['qiyan_lushi'])
         return dict(FORMS['wuyan_lushi'])
-    if '七言绝句' in blob or '七绝' in blob:
+    if '七言绝句' in blob_l or '七绝' in blob_l:
         return dict(FORMS['qiyan_jueju'])
-    if '五言绝句' in blob or '五绝' in blob or '绝句' in blob:
-        if '七言' in blob:
+    if '五言绝句' in blob_l or '五绝' in blob_l or '绝句' in blob_l:
+        if '七言' in blob_l:
             return dict(FORMS['qiyan_jueju'])
         return dict(FORMS['wuyan_jueju'])
 
-    # Order: more specific first
+    # Order: more specific first — skip bare quatrain when 格律 context
     order = (
         'shakespearean_sonnet',
         'petrarchan_sonnet',
@@ -261,31 +370,37 @@ def detect_verse_form(session=None, extra_user=None, text=None):
         'free',
     )
     for fid in order:
+        if fid == 'quatrain' and re.search(r'格律|绝句|律诗|五言|七言', blob_l):
+            continue
         spec = FORMS[fid]
         for alias in spec['aliases']:
-            if alias.lower() in blob:
+            if alias.lower() in blob_l:
                 return dict(spec)
         if fid in ('sonnet', 'haiku', 'limerick', 'couplet', 'quatrain'):
-            if re.search(rf'\b{re.escape(fid)}\b', blob):
+            if re.search(rf'\b{re.escape(fid)}\b', blob_l):
                 return dict(spec)
 
-    # Infer from sample poem shape (e.g. example card body)
-    poem_lines = [
-        ln.strip() for ln in re.split(r'[\r\n]+', blob)
-        if re.search(r'[\u4e00-\u9fff]', ln)
-    ]
-    if len(poem_lines) >= 4:
-        lens = [len(re.findall(r'[\u4e00-\u9fff]', ln)) for ln in poem_lines]
-        if len(poem_lines) == 8 and all(x == 5 for x in lens):
-            return dict(FORMS['wuyan_lushi'])
-        if len(poem_lines) == 8 and all(x == 7 for x in lens):
-            return dict(FORMS['qiyan_lushi'])
-        if len(poem_lines) == 4 and all(x == 5 for x in lens):
-            return dict(FORMS['wuyan_jueju'])
-        if len(poem_lines) == 4 and all(x == 7 for x in lens):
-            return dict(FORMS['qiyan_jueju'])
+    shape2 = infer_form_from_poem(blob)
+    if shape2:
+        return shape2
 
     return dict(FORMS['free'])
+
+
+def lock_verse_form(session_id, form):
+    """Persist form id into stage_meta.verse_form."""
+    if not form or not form.get('id') or form.get('id') == 'free':
+        return
+    try:
+        import db as _db
+        row = _db.fetchone('SELECT stage_meta FROM poem_sessions WHERE id = %s', (str(session_id),))
+        meta = _db.loads((row or {}).get('stage_meta'), {}) or {}
+        meta['verse_form'] = form['id']
+        _db.execute(
+            'UPDATE poem_sessions SET stage_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = %s',
+            (_db.dumps(meta), str(session_id)))
+    except Exception:
+        pass
 
 
 def form_instruction(form, lang=None):
@@ -320,6 +435,29 @@ def form_instruction(form, lang=None):
         f'节结构：{st}。韵式提示：{form.get("rhyme")}。'
         f'{form.get("slots_hint")} '
         '禁止擅自缩短；禁止五言写成六字行（如三槽各填双字）。'
+    )
+
+
+def register_instruction(form, lang=None):
+    """Diction / register: classical regulated vs modern free verse."""
+    en = (lang or 'zh').startswith('en')
+    cpl = (form or {}).get('chars_per_line')
+    fid = (form or {}).get('id') or 'free'
+    if not cpl and fid not in (
+            'wuyan_lushi', 'qiyan_lushi', 'wuyan_jueju', 'qiyan_jueju'):
+        if en:
+            return 'REGISTER: match the named form; modern free-verse diction OK unless classical requested.'
+        return '语体：随体裁；未点名格律时可用现代自由诗语汇，但须贴合主题。'
+    if en:
+        return (
+            'REGISTER — classical regulated Chinese: monosyllabic diction, scenic→lyric; '
+            'FORBIDDEN to fill like modern free verse (short-line monologue, psych jargon, '
+            '白话长定语). Each slot = one character.'
+        )
+    return (
+        '【语体——近体/格律】用古典景物与单字动词，景→情；'
+        '严禁写成现代自由诗：禁止短行独白拼贴、当代心理词（心脏/人儿呦/妄想…）、'
+        '白话「的」字长定语、散文句。一槽一字，句句满字。'
     )
 
 

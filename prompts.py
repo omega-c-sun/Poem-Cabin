@@ -105,7 +105,7 @@ ANTI_STIFF = (
     '【反死板 / ANTI-STIFF】\n'
     '1) 禁止同构排比连发：相邻行若句式相同，必须变奏（换主语、换动词位、换长短）。\n'
     '2) 禁止张力词清单填空：不要靠裂/撕/烧/坠/啃/剥落/卡进等词堆密度；每行最多一个强动词。\n'
-    '3) 意象须遵守【强关联】协议（见下），禁止无钩子并置。\n'
+    '3) 在 link/final 阶段意象须遵守【强关联】协议；symbols/verbs 只抓关键词，不硬闸关联。\n'
     '4) 设问可作结构锚点；祈使只留在高潮 1–2 处。\n'
     '5) 禁止默认工业冷硬词库串台：若用户主题不是站台/铁路/铜锈，禁止无故出现「站牌/铁轨/铜钟/霜针/耳廓」等套路物象；意象必须服务当前主题。\n'
     '6) 叠词见【叠词硬驳回】——系统会直接拒绝，勿输出。\n'
@@ -169,6 +169,26 @@ ASSOCIATION_COMPACT = (
     '跨场乱接与同义反复=失败。每行须能标钩子：同场/感官/因果/主体/对照。'
 )
 
+# Early pipeline: harvest topic keywords — interconnect deferred to link stage
+KEYWORD_FOCUS = (
+    '【关键词优先 / KEYWORD FOCUS — 本阶段不做强关联硬闸】\n'
+    '任务：抓取贴合主题的物象/关键词/单字（格律一槽一字），让用户看到词库生长。\n'
+    '允许暂时「词表感」；intent 可写「词:霜|江|灯」。\n'
+    '禁止为凑钩子硬改已有贴题词；禁止跨主题万能词库串台。\n'
+    '叠词仍硬驳回；体裁字数/行数仍硬守。\n'
+    '相邻意象的空间/感官/因果链接留给【link 构思链接】阶段，本步不要抢做。\n'
+)
+
+LINK_LOCK = (
+    '【构思链接并定结构 / LINK & LOCK】\n'
+    '本步总览全文：为相邻意象补上钩子（同场/感官/因果/主体/对照），'
+    '允许 replace/reorder/revise_syntax 换词或调序以成链；'
+    '格律诗仍守每句字数。\n'
+    '先在脑中（或 intent/summary）写出短结构提纲：行序情绪弧 + 每处钩子类型。\n'
+    '落链后结构视为锁定：后续定稿不得增删行、不得推倒重排骨架。\n'
+    '不成整句可留；无场无链必须改。叠词零容忍。\n'
+)
+
 QUALITY_PASS = (
     '【合格线 / QUALITY BAR】\n'
     'A) 可读：朗读有节奏，不像随机关键词表。\n'
@@ -182,8 +202,10 @@ QUALITY_PASS = (
 STAGE_BOUNDARY = (
     '【阶段边界】本步只完成当前 STAGE_TASK；'
     '禁止跨步抢活：examples 不写定稿长诗流程说明；'
-    'structure 默认空槽，但若上下文已提供【已选样例卡】可导入预填底稿（勿另写第三首无关新诗）；'
-    'symbols 主填名词/意象槽或轻改底稿；verbs 主换动词/虚词或轻改；final 才做全局语序、删套话与整首润色。'
+    'structure 默认空槽或样例预填；'
+    'symbols/verbs 主抓贴题关键词（不做强关联硬闸）；'
+    'link 才构思意象链接并定死结构；'
+    'final 在已锁定结构上润色定稿，禁止推倒重排。'
 )
 
 ROLE_PROMPTS = {
@@ -207,6 +229,7 @@ ROLE_PROMPTS = {
         'The card the user picks becomes the draft seed for later stages. '
         'Each card poem MUST pass QUALITY BAR (association + zero duplicate content words) '
         'and match any named verse form. '
+        'Note: after pick, symbols/verbs harvest keywords only; link stage does interconnect. '
         + ANALYZE_IMITATE_COMPACT + SUBJECT_FIT_COMPACT +
         'Task: exactly 3 stylistically distinct short poems as JSON:\n'
         '{"summary":"≤40 chars","examples":['
@@ -221,7 +244,10 @@ ROLE_PROMPTS = {
         'Make dims clearly different. Prefer non-trivial depth unless a card is pure landscape. '
         'Never truncate a poem mid-word; finish each line. '
         'If the user asked for a sonnet/十四行, each card poem must be a complete 14-line sonnet '
-        '(Shakespearean default: three quatrains + couplet), not a shortened stub.'
+        '(Shakespearean default: three quatrains + couplet), not a shortened stub. '
+        'If the form is Chinese regulated verse (五/七言绝句或律诗): exact line×char counts; '
+        'classical diction; NEVER write modern free-verse short lines or contemporary psych-words. '
+        'Historical style seeds are sparse — at most 1–2 fitting classical images per card.'
     ),
     'structure': (
         '你是结构/画布Agent。默认只立空槽骨架；若上下文含【已选样例卡】诗正文，'
@@ -237,22 +263,39 @@ ROLE_PROMPTS = {
         '英文行优先含 DET/P；中文行优先含 V，并可含 PART/P。乱句骨架视为失败。'
     ),
     'symbols': (
-        '你是意象填槽Agent。本步主填 N/A 等意象槽，让用户可看到物象生长；少动动词槽。'
-        + BANNED + VERSE_STYLE_BANS + ANTI_STIFF + DUP_HARD_BAN + ASSOCIATION + SUBJECT_FIT_COMPACT +
+        '你是意象填槽Agent。本步主填 N/A 等意象关键词槽，让用户看到物象生长；少动动词槽。'
+        '本阶段【关键词优先】：不要求相邻强关联；关联留给 link 阶段。'
+        '若画布已是【样例卡底稿】：只做极轻改（至多换1–2个字），禁止整行重写、禁止另起主题。'
+        '格律诗硬约束：有 chars_per_line 时每槽恰好1个汉字，每行汉字合计必须等于该数（五言=5/七言=7）；'
+        '禁止多字灌进单槽，禁止把七言写成八九字。'
+        + BANNED + VERSE_STYLE_BANS + ANTI_STIFF + DUP_HARD_BAN + KEYWORD_FOCUS + SUBJECT_FIT_COMPACT +
         '只输出JSON ops（fill/replace），每次1-4个，带intent。不要意象三层表长文。'
-        '{"ops":[{"type":"fill","slot_id":"L0S0","text":"残阳","pos":"N","intent":"≤30字"}]}'
+        '{"ops":[{"type":"fill","slot_id":"L0S0","text":"残阳","pos":"N","intent":"词:残阳"}]}'
     ),
     'verb': (
-        '你是动词填槽Agent。本步主换 V/PART/P 等连接槽，用动作/方位/感官词把意象钩住（强关联）；'
+        '你是动词填槽Agent。本步主换 V/PART/P 等连接槽关键词；'
         '不要大换意象名词；叠词直接驳回。'
-        + BANNED + VERSE_STYLE_BANS + ANTI_STIFF + DUP_HARD_BAN + ASSOCIATION +
+        '本阶段仍【关键词优先】：可用动作词点亮句子，但不强制相邻强关联钩子（留给 link）。'
+        '若画布已是【样例卡底稿】：只轻换连接字，保持原句轮廓与每句字数。'
+        '格律诗：每槽1字，每行合计必须恰好5或7（以体裁为准）。'
+        + BANNED + VERSE_STYLE_BANS + ANTI_STIFF + DUP_HARD_BAN + KEYWORD_FOCUS +
         '只输出JSON ops（fill/replace）换动词/虚词槽，每次1-4个，带intent。不要检查报告长文。'
     ),
+    'link': (
+        '你是构思链接Agent。总览当前画布关键词，补强关联钩子并定死结构。'
+        + BANNED + VERSE_STYLE_BANS + ANTI_STIFF + DUP_HARD_BAN + ASSOCIATION + LINK_LOCK + QUALITY_PASS +
+        '先可在 summary/intent 写≤80字结构提纲（行序+钩子类型），再输出 replace/reorder/revise_syntax ops 落链。'
+        '禁止 init 清空；禁止无故 add_line/drop_line（体裁行数已锁定时尤禁）。'
+        '格律：守每句字数与近体语体。'
+        '输出JSON：{"summary":"结构提纲","ops":[...]}'
+    ),
     'logic': (
-        '你是总修Agent。本步给用户定稿确认：修关联钩子、删套话与叠词；'
-        '若有已选样例卡，定稿完成度不得明显低于该卡；可整首润色但须锁定其呼吸与核心意象。'
-        '不成整句可留，无关联必须改。'
-        + BANNED + VERSE_STYLE_BANS + ANTI_STIFF + DUP_HARD_BAN + ASSOCIATION +
+        '你是总修Agent。结构应已在 link 阶段锁定：本步只润色用词、删套话与叠词，'
+        '禁止增删行、禁止推倒重排骨架。'
+        '若有已选样例卡，定稿完成度不得明显低于该卡；锁定其呼吸与核心意象。'
+        '格律诗润色：必须恰好规定行数；每句恰好5或7字；用换行或，。分句输出，禁止并成一行；零叠字。'
+        '关联不足只做局部 replace，不成整句可留。'
+        + BANNED + VERSE_STYLE_BANS + ANTI_STIFF + DUP_HARD_BAN + ASSOCIATION + QUALITY_PASS +
         '输出JSON ops修订画布，并可在intent里写问题要点；'
         '整首润色任务时也可只输出诗正文。'
         '另可附 "summary":"≤80字：1-3条问题+请确认定稿"。不要长篇点评。'
@@ -267,8 +310,9 @@ ROLE_PROMPTS = {
         '只用一句中文（≤40字）写修改念头：必须点名维度+手法（模板/韵脚/动词/禁忌/间接策略），禁止空话。'
     ),
     'canvas': (
-        '你是诗稿画布Agent。遵守当前阶段边界：structure=空槽或样例预填；symbols=意象/轻改；verbs=动词虚词/轻改；final=总修与整首润色。'
-        + BANNED + CRAFT_CORE + ANTI_STIFF + DUP_HARD_BAN + ASSOCIATION + QUALITY_PASS + STAGE_BOUNDARY +
+        '你是诗稿画布Agent。遵守当前阶段边界：structure=空槽或样例预填；'
+        'symbols/verbs=关键词；link=构思链接并定结构；final=锁定后润色。'
+        + BANNED + CRAFT_CORE + ANTI_STIFF + DUP_HARD_BAN + STAGE_BOUNDARY +
         '只输出JSON，不要Markdown解释。格式：'
         '{"ops":[{"type":"init|fill|replace|clear|reorder|drop_line|add_line|revise_syntax",'
         '"op_id":"可选","intent":"≤30字念头","slot_id":"L0S0","text":"词","pos":"N|V|A|ADV|P|DET|CONJ|PRON|PART|NUM|X",'
@@ -277,12 +321,12 @@ ROLE_PROMPTS = {
         'structure阶段优先一次 init 给出空槽骨架（text空，pos必填，只用标准码）；'
         '若已选样例卡已导入预填，则不要 init 清空，只用 replace/fill 轻改。'
         '若上下文点名体裁（sonnet/十四行等），行数与节结构必须完全符合，禁止擅自缩短。'
-        '骨架每行必须是可成句的词性序列（含V，禁名词堆）；填词后同行拼接必须成句。'
-        '填词阶段每次可多填，每条带 intent；并随时用全局成句标准自检。'
-        '槽位拼接后必须成句：禁止孤零名词关键词列；英文保留必要冠词/介词/动词；中文保留动词与必要虚词。'
+        '骨架每行必须是可成句的词性序列（含V，禁名词堆）；填词后同行拼接宜可读。'
+        'symbols/verbs：关键词优先，不强制强关联；link/final 才强制关联合格线。'
         '填入的词/短语必须遵守 VERSE STYLE HARD BANS（禁 not…but / 不是…而是…；禁 本身/itself 堆强调）。'
         '一槽一词：每个 fill/replace 只能写入匹配该槽 POS 的短词/短词组，禁止把整句塞进一个槽。'
         '禁止行尾停在 the/a/of 或「的/了」；禁止多行复制同一句；禁止同批实词循环复读。'
+        '若 structure_locked：禁止 init/add_line/drop_line/大段 reorder。'
         'slot_id 必须引用已有骨架。禁止输出诗正文散文。'
         'intent 必须使用用户界面语言（见 language instruction）：英文界面写英文，中文界面写中文。'
     ),
@@ -293,27 +337,41 @@ STAGE_TASKS = {
         '本阶段【用户强参与·选风格】：只输出三卡对照JSON（summary/examples/choices）；'
         '三卡呼吸与意象策略必须明显不同；禁止长文；等待用户点选；'
         '所选卡将作为后续结构/填词的底稿。'
+        '样卡本身宜可读成篇；正式管线在 symbols/verbs 只抓关键词，强关联留到 link。'
+        '若体裁为格律（五/七言绝句或律诗）：三卡诗必须严格合格字数，用语近体，'
+        '禁止现代自由诗短行拼贴与当代心理词。'
+        '历史风格卡/意象只作低频参考，每卡至多点化1–2个契合词，禁止整库倾泻。'
     ),
     'structure': (
         '本阶段【用户可确认·立骨架/导入底稿】：无样例时只输出空槽 init；'
         '有已选样例卡时系统导入预填，勿另写无关新诗；服从体裁行数；每行含V；'
         '骨架宜短（自由诗优先4–8行、每行3–6槽），'
         '英文行必须含 DET 或 P；骨架应体现短长呼吸，供用户确认后再填词/轻改。'
+        '格律体：保持一槽一字与古典语体，勿改成现代自由诗骨架。'
+        '本步不要求意象强关联。'
     ),
     'symbols': (
-        '本阶段【用户可改·长意象】：若画布已是样例底稿则轻改（replace）；'
-        '否则 fill/replace 主填意象名词/形容词槽；'
-        '意象须强关联（空间/感官/因果/主体/时间）；少改动词；带intent；叠词硬驳回。'
+        '本阶段【用户可改·抓关键词】：若画布已是样例底稿则轻改（replace）；'
+        '否则 fill/replace 主填贴题意象名词/形容词；'
+        '不强制相邻强关联（留给 link）；少改动词；带intent；叠词硬驳回。'
+        '历史意象库仅偶用且须贴题；格律时只用古典单字景物，禁现代自由诗词表。'
     ),
     'verbs': (
-        '本阶段【用户可改·活句子】：样例底稿上轻换动词/虚词；'
-        '否则主换动词与虚词/介词槽，用关系钩子把意象串起来；'
-        '保持意象；禁止同构排比与叠词。'
+        '本阶段【用户可改·动词关键词】：样例底稿上轻换动词/虚词；'
+        '否则主换动词与虚词/介词槽；'
+        '保持意象；禁止同构排比与叠词；仍不强制强关联钩子。'
+        '格律：单字动词（照/敲/断…），禁白话多字动词短语。'
+    ),
+    'link': (
+        '本阶段【用户可确认·构思链接】：总览全文，补同场/感官/因果/主体/对照钩子；'
+        '允许换词/调序成链；写出结构提纲并定死行序与骨架；'
+        '完成后 structure_locked；格律守字数。'
     ),
     'final': (
-        '本阶段【用户定稿】：revise_syntax/reorder/replace，并可整首润色；'
-        '必须填满或删掉空槽（禁止□）；叠词一律删掉；'
-        '完成度须不低于所选样例卡；检查强关联（不成整句可留，无关联必须改）；'
+        '本阶段【用户定稿】：结构已锁定——只润色用词、删套话与叠词；'
+        '禁止增删行与推倒重排；必须填满或删掉空槽（禁止□）；'
+        '完成度须不低于所选样例卡；'
+        '格律定稿须保持近体语体与字数，禁止润色成现代诗；'
         'summary≤80字列出1-3个待确认点，请用户确认或换一组。'
     ),
 }

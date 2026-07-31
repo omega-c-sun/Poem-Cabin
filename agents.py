@@ -14,10 +14,15 @@ import verse_form
 from prompts import (
     STAGE_TASKS, DIM_MAP, ANTI_STIFF, ANALYZE_IMITATE_COMPACT,
     SUBJECT_FIT_COMPACT, STAGE_BOUNDARY, QUALITY_PASS, DUP_HARD_BAN, ASSOCIATION,
+    KEYWORD_FOCUS, LINK_LOCK,
 )
 
-STAGES = ['chat', 'examples', 'structure', 'symbols', 'verbs', 'final']
-CANVAS_STAGES = {'structure', 'symbols', 'verbs', 'final'}
+STAGES = ['chat', 'examples', 'structure', 'symbols', 'verbs', 'link', 'final']
+CANVAS_STAGES = {'structure', 'symbols', 'verbs', 'link', 'final'}
+# Early fill: harvest keywords — no ASSOCIATION hard gate
+KEYWORD_STAGES = frozenset({'structure', 'symbols', 'verbs'})
+# Link + final: interconnect and lock / polish
+LINK_STAGES = frozenset({'link', 'final'})
 
 # Active runs: session_id -> run_token (also stored in DB)
 _active_runs = {}
@@ -31,6 +36,7 @@ def stage_label(stage, lang=None):
         'structure': 'stage_structure',
         'symbols': 'stage_symbols',
         'verbs': 'stage_verbs',
+        'link': 'stage_link',
         'final': 'stage_final',
     }.get(stage)
     return i18n.t(key, lang=lang) if key else (stage or '')
@@ -212,11 +218,17 @@ def load_canvas(session):
     data = db.loads(raw, {}) if raw is not None else {}
     if not data or not data.get('lines'):
         return poem_canvas.empty_canvas()
-    return poem_canvas.normalize_canvas(data)
+    cv = poem_canvas.normalize_canvas(data)
+    # Collapse bug fix: 五/七言 empty seats must never disappear from stored JSON
+    if poem_canvas._regulated_meter(cv):
+        cv = poem_canvas.ensure_regulated_width(cv)
+    return cv
 
 
 def save_canvas(session_id, canvas):
     canvas = poem_canvas.normalize_canvas(canvas)
+    if poem_canvas._regulated_meter(canvas):
+        canvas = poem_canvas.ensure_regulated_width(canvas)
     db.execute(
         '''UPDATE poem_sessions
            SET canvas_json = %s::jsonb, updated_at = CURRENT_TIMESTAMP
@@ -789,19 +801,6 @@ def build_context(session, prefs, stage=None, lang=None, user_id=None):
     en = (lang or 'zh').startswith('en')
     neg_hint = '；'.join((x.get('summary') or '')[:40] for x in neg[-3:]) if neg else (
         'none' if en else '无')
-    mem = ''
-    if user_id and not en:
-        # Only inject topic-similar past drafts — never unrelated history
-        q = current_topic_query(session)
-        bits = cross_session_memory(
-            user_id, exclude_session_id=str(session.get('id')), query_text=q)
-        if bits:
-            mem = (
-                '题材相近的过往（仅相似题材，禁止硬套无关主题；可借鉴呼吸/意象场，勿抄原句）：'
-                + ' || '.join(bits)
-            )
-        else:
-            mem = '题材相近过往：无（勿假装记得无关作品）'
     import i18n
     lang_line = i18n.t('llm_lang', lang=lang)
     cv = load_canvas(session)
@@ -819,18 +818,30 @@ def build_context(session, prefs, stage=None, lang=None, user_id=None):
     except Exception:
         pass
     form_line = verse_form.form_instruction(form, lang=lang)
-    # Style cards + stage-scoped craft (participation clarity + anti-stiff)
+    register_line = verse_form.register_instruction(form, lang=lang)
+    topic_q = current_topic_query(session) if not en else ''
+    stage_now = stage or session.get('stage') or ''
+    # Style cards + sparse historical palette (form-aware, lower frequency)
     style_block = ''
     try:
-        from style_corpus import pick_cards, format_injection
+        from style_corpus import (
+            pick_cards, format_injection, pick_historical_palette,
+            inject_budget, modern_dictation_bans,
+        )
         cult = None
         if isinstance(cultural, dict) and cultural:
             cult = next(iter(cultural.keys()), None)
-        cards = pick_cards(lang=lang, n=2, culture=cult)
-        style_block = format_injection(cards, lang=lang)
+        n_cards = inject_budget(stage=stage_now, form=form)
+        cards = pick_cards(
+            lang=lang, n=n_cards, culture=cult, form=form,
+            topic=topic_q, stage=stage_now)
+        palette = pick_historical_palette(topic=topic_q, form=form, n=5)
+        style_block = format_injection(cards, lang=lang, form=form, palette=palette)
+        ban_mod = modern_dictation_bans(form=form, lang=lang)
+        if ban_mod:
+            style_block = (style_block + '\n' + ban_mod).strip()
     except Exception:
         style_block = ''
-    stage_now = stage or session.get('stage') or ''
     # Selected style card — higher priority than corpus snippets
     selected_block = ''
     try:
@@ -839,7 +850,7 @@ def build_context(session, prefs, stage=None, lang=None, user_id=None):
     except Exception:
         sel = {}
     if isinstance(sel, dict) and (sel.get('poem') or sel.get('template')) and stage_now in (
-            'structure', 'symbols', 'verbs', 'final'):
+            'structure', 'symbols', 'verbs', 'link', 'final'):
         if en:
             selected_block = (
                 'SELECTED STYLE CARD (primary draft — refine, do not abandon):\n'
@@ -859,13 +870,55 @@ def build_context(session, prefs, stage=None, lang=None, user_id=None):
                 f'样例诗：\n{sel.get("poem") or ""}\n'
                 '除非用户明确要求换主题，禁止另写一首无关新诗。\n'
             )
-    protocol_bits = [STAGE_BOUNDARY, ANTI_STIFF, DUP_HARD_BAN, ASSOCIATION, QUALITY_PASS]
+    protocol_bits = [STAGE_BOUNDARY, ANTI_STIFF, DUP_HARD_BAN]
+    if stage_now in KEYWORD_STAGES:
+        protocol_bits.append(KEYWORD_FOCUS)
+    if stage_now in LINK_STAGES:
+        protocol_bits.extend([ASSOCIATION, LINK_LOCK if stage_now == 'link' else '', QUALITY_PASS])
+        protocol_bits = [p for p in protocol_bits if p]
+    if stage_now == 'final':
+        protocol_bits.append(
+            'STRUCTURE LOCKED: no init/add_line/drop_line; no wholesale reorder; polish only.'
+            if en else
+            '结构已锁定：禁止 init/增删行/大段 reorder；只润色。'
+        )
+    if stage_now == 'examples':
+        protocol_bits.extend([ASSOCIATION, QUALITY_PASS])  # sample cards stay readable wholes
     if stage_now in ('examples', 'structure'):
         protocol_bits.append(ANALYZE_IMITATE_COMPACT)
-    if stage_now in ('examples', 'symbols', 'verbs', 'final'):
+    if stage_now in ('examples', 'symbols', 'verbs', 'link', 'final'):
         protocol_bits.append(SUBJECT_FIT_COMPACT)
-    # Prefer compact reminder on fill rounds is already covered by ASSOCIATION full text once
     protocol_block = '\n'.join(protocol_bits)
+    # Memory: lower frequency for regulated; fewer / stricter matches
+    mem = ''
+    if user_id and not en:
+        from style_corpus import is_regulated_form as _is_reg
+        q = topic_q or current_topic_query(session)
+        if _is_reg(form):
+            import random as _rnd
+            if _rnd.random() < 0.35 and q:
+                bits = cross_session_memory(
+                    user_id, exclude_session_id=str(session.get('id')),
+                    query_text=q, limit=1, min_score=0.12)
+                if bits:
+                    mem = (
+                        '题材相近过往（格律语体：只借古典意象场，禁套现代自由诗句式；≤1条）：'
+                        + ' || '.join(bits)
+                    )
+                else:
+                    mem = '题材相近过往：无'
+            else:
+                mem = '题材相近过往：本轮不注入（降低历史串台）'
+        else:
+            bits = cross_session_memory(
+                user_id, exclude_session_id=str(session.get('id')), query_text=q, limit=2)
+            if bits:
+                mem = (
+                    '题材相近的过往（仅相似题材，禁止硬套无关主题；可借鉴呼吸/意象场，勿抄原句；低频参考）：'
+                    + ' || '.join(bits[:2])
+                )
+            else:
+                mem = '题材相近过往：无（勿假装记得无关作品）'
     if en:
         messages.append({
             'role': 'user',
@@ -875,7 +928,7 @@ def build_context(session, prefs, stage=None, lang=None, user_id=None):
                 f'User dimension weights: {dim_line}\n'
                 f'Cultural prefs: {cultural}\nRecent negative feedback: {neg_hint}\n'
                 f'Verb prefs: {prefs.get("verb_preferences") or {}}\n'
-                f'{form_line}\n'
+                f'{form_line}\n{register_line}\n'
                 f'Current canvas:\n{cv_text or "(empty)"}\n'
                 'Follow the protocol; no empty praise. Keep philosophical depth (depth) unless '
                 'the user explicitly wants pure scenic description.\n'
@@ -892,7 +945,7 @@ def build_context(session, prefs, stage=None, lang=None, user_id=None):
                 f'用户维度权重：{dim_line}\n'
                 f'文化偏好：{cultural}\n近期负反馈摘要：{neg_hint}\n'
                 f'动词偏好：{prefs.get("verb_preferences") or {}}\n'
-                f'{form_line}\n'
+                f'{form_line}\n{register_line}\n'
                 f'{mem}\n'
                 f'当前画布：\n{cv_text or "（空）"}\n'
                 '严格执行提示词协议；输出禁止无用空话；维度必须可追溯。'
@@ -1155,7 +1208,7 @@ def stream_user_turn(user_id, text, action=None, form=None, lang=None,
         cp = resume_from or session.get('checkpoint_id') or 'skeleton_ready'
         yield sse_process(f'继续：{cp}', kind='ok')
         if cp == 'skeleton_ready' or stage in CANVAS_STAGES:
-            fill_stage = stage if stage in ('symbols', 'verbs', 'final') else 'symbols'
+            fill_stage = stage if stage in ('symbols', 'verbs', 'link', 'final') else 'symbols'
             if stage == 'structure':
                 db.execute("UPDATE poem_sessions SET stage = 'symbols' WHERE id = %s", (sid,))
                 fill_stage = 'symbols'
@@ -1196,6 +1249,48 @@ def stream_user_turn(user_id, text, action=None, form=None, lang=None,
 
     session = db.fetchone('SELECT * FROM poem_sessions WHERE id = %s', (sid,))
     stage = session['stage'] or 'chat'
+
+    # Mid-pipeline: user names 七言绝句 / 每句7字 → relock form and re-seed from card
+    if text and stage in ('structure', 'symbols', 'verbs', 'link', 'final', 'examples'):
+        explicit = verse_form.detect_explicit_form(text)
+        if explicit and explicit.get('id') != 'free':
+            meta_f = load_stage_meta(session)
+            prev = meta_f.get('verse_form')
+            if prev != explicit['id'] or (
+                    explicit.get('chars_per_line')
+                    and prev in ('quatrain', 'couplet', 'free', None)):
+                meta_f['verse_form'] = explicit['id']
+                meta_f.pop('skip_example_seed', None)
+                save_stage_meta(sid, meta_f)
+                verse_form.lock_verse_form(sid, explicit)
+                yield sse_process(
+                    _tr(lang,
+                        f'已按你的要求改锁体裁：{explicit["id"]}'
+                        + (f'（每句{explicit.get("chars_per_line")}字）'
+                           if explicit.get('chars_per_line') else ''),
+                        f'Relocked form: {explicit["id"]}'),
+                    kind='ok')
+                sel = meta_f.get('selected_example') if isinstance(meta_f.get('selected_example'), dict) else None
+                seed_poem = (sel.get('poem') or '').strip() if sel else ''
+                if seed_poem and stage in ('structure', 'symbols', 'verbs', 'link', 'final'):
+                    cv_fix = poem_canvas.seed_canvas_from_poem(
+                        seed_poem, form=explicit, lang=lang)
+                    if cv_fix and cv_fix.get('lines'):
+                        cv_fix['seeded_from_example'] = True
+                        cv_fix['form_lock'] = True
+                        cv_fix['verse_form'] = explicit['id']
+                        if explicit.get('chars_per_line'):
+                            cv_fix['chars_per_line'] = int(explicit['chars_per_line'])
+                        save_canvas(sid, cv_fix)
+                        yield sse('canvas', cv_fix)
+                        poem_fix = poem_canvas.canvas_readable_text(cv_fix, lang=lang)
+                        yield sse('poem', {
+                            'from': '', 'to': poem_fix or '', 'full': poem_fix or ''})
+                        yield sse_process(
+                            _tr(lang, '已按新体裁从样例卡重灌底稿',
+                                'Re-seeded from style card under new form'),
+                            kind='ok')
+                session = db.fetchone('SELECT * FROM poem_sessions WHERE id = %s', (sid,))
 
     if stage == 'chat':
         import i18n
@@ -1348,11 +1443,28 @@ def _handle_pick_example(session, prefs, form, lang=None, user_id=None):
     target = {k: int(dims.get(k, 50)) for k in stage_schema.DIM_KEYS}
     meta['selected_example'] = chosen
     meta.pop('skip_example_seed', None)  # re-enable seeding on new pick
-    # Keep / refresh verse form from chat + card text
-    form = verse_form.detect_verse_form(session, text=f"{chosen.get('title') or ''}\n{chosen.get('template') or ''}\n{chosen.get('poem') or ''}")
+    meta.pop('structure_locked', None)
+    meta.pop('link_plan', None)
+    # Force form from card poem shape + chat; override weak quatrain locks
+    card_blob = (
+        f"{chosen.get('title') or ''}\n{chosen.get('template') or ''}\n"
+        f"{chosen.get('rules') or ''}\n{chosen.get('poem') or ''}"
+    )
+    # Clear weak prior lock so detect_explicit / poem-shape can win
+    if meta.get('verse_form') in ('quatrain', 'couplet', 'free'):
+        meta.pop('verse_form', None)
+    save_stage_meta(sid, meta)
+    session = db.fetchone('SELECT * FROM poem_sessions WHERE id = %s', (sid,)) or session
+    form = verse_form.detect_verse_form(session, text=card_blob)
+    shape = verse_form.infer_form_from_poem(chosen.get('poem') or '')
+    if shape and (
+            not form or form.get('id') in ('free', 'quatrain', 'couplet')
+            or (shape.get('chars_per_line') and not form.get('chars_per_line'))):
+        form = shape
     if form and form.get('id') != 'free':
         meta['verse_form'] = form['id']
-    save_stage_meta(sid, meta)
+        save_stage_meta(sid, meta)
+        verse_form.lock_verse_form(sid, form)
     db.execute(
         '''UPDATE poem_sessions
            SET target_dimensions = %s::jsonb, stage = 'structure', updated_at = CURRENT_TIMESTAMP
@@ -1444,7 +1556,15 @@ def _stream_examples_stage(session, prefs, temperature=0.7, extra_user=None, lan
             save_stage_meta(sid, meta)
             messages.append({
                 'role': 'user',
-                'content': verse_form.form_instruction(form, lang=lang),
+                'content': (
+                    verse_form.form_instruction(form, lang=lang) + '\n'
+                    + verse_form.register_instruction(form, lang=lang) + '\n'
+                    + (
+                        '三张样例卡必须是真正的格律诗（字数/行数合格），'
+                        '用语须近体/古典，禁止写成现代自由诗分行或当代口语独白。'
+                        if form.get('chars_per_line') else ''
+                    )
+                ),
             })
     if extra_user:
         messages.append({
@@ -1589,6 +1709,17 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
             fid = (cv.get('verse_form') or meta_f.get('verse_form') or '')
             if fid and fid in verse_form.FORMS:
                 form = dict(verse_form.FORMS[fid])
+        # Upgrade quatrain → 七绝/五绝 from selected card poem
+        meta_seed = load_stage_meta(session)
+        sel_ex = meta_seed.get('selected_example') if isinstance(meta_seed.get('selected_example'), dict) else None
+        if sel_ex and (sel_ex.get('poem') or '').strip():
+            shape = verse_form.infer_form_from_poem(sel_ex['poem'])
+            if shape and (
+                    not form or form.get('id') in ('free', 'quatrain', 'couplet')
+                    or (shape.get('chars_per_line') and not (form or {}).get('chars_per_line'))):
+                form = shape
+                meta_seed['verse_form'] = form['id']
+                save_stage_meta(sid, meta_seed)
         if form and form.get('lines'):
             cv['form_lock'] = True
             cv['verse_form'] = form.get('id')
@@ -1607,9 +1738,18 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                     if verse_form.line_zh_char_count(ln) > int(cpl):
                         need_reset = True
                         break
+            # Also reset when any non-empty line misses chars_per_line (junk draft)
+            if cpl and not need_reset:
+                for ln in (cv.get('lines') or []):
+                    got = verse_form.line_zh_char_count(ln)
+                    if got and got != int(cpl):
+                        need_reset = True
+                        break
+                    if len(ln.get('slots') or []) != int(cpl):
+                        need_reset = True
+                        break
             if need_reset:
                 # Prefer re-seeding from selected card / readable draft over empty form skeleton
-                meta_seed = load_stage_meta(session)
                 sel_poem = ''
                 if isinstance(meta_seed.get('selected_example'), dict):
                     sel_poem = (meta_seed['selected_example'].get('poem') or '').strip()
@@ -1627,13 +1767,19 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                         if form.get('id'):
                             reseeds['verse_form'] = form.get('id')
                             reseeds['form_lock'] = True
+                        if form.get('chars_per_line'):
+                            reseeds['chars_per_line'] = int(form['chars_per_line'])
                     cv = reseeds
                     save_canvas(sid, cv)
                     yield sse_process(
                         _tr(lang,
-                            f'已按体裁重排样例底稿（{len(cv.get("lines") or [])}行，保留诗句）',
+                            f'已按体裁重排样例底稿（{len(cv.get("lines") or [])}行'
+                            + (f'×{cpl}字' if cpl else '')
+                            + '，保留诗句）',
                             f'Re-slotted style-card draft '
-                            f'({len(cv.get("lines") or [])} lines, kept verse)'),
+                            f'({len(cv.get("lines") or [])} lines'
+                            + (f'×{cpl} chars' if cpl else '')
+                            + ', kept verse)'),
                         kind='ok')
                     yield sse('canvas', cv)
                 else:
@@ -1677,6 +1823,11 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
             if not (s.get('text') or '').strip()
         )
         seeded = bool(cv.get('seeded_from_example'))
+        # Restore structure_locked from meta (final after link)
+        meta_lock = load_stage_meta(session)
+        if meta_lock.get('structure_locked') or cv.get('structure_locked'):
+            cv['structure_locked'] = True
+            save_canvas(sid, cv)
         ratio_start = _fill_ratio(cv)
         light_revise = seeded or ratio_start >= 0.85
         # Seeded drafts: drop phantom empty DET chips before light-revise UI
@@ -1695,12 +1846,20 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
             )
             ratio_start = _fill_ratio(cv)
             light_revise = True
+        # link stage: first write a short structure plan into stage_meta
+        if stage == 'link' and run_still_valid(sid, token):
+            yield from _link_plan_round(
+                session, prefs, sid, token, cv, form, lang, user_id, extra_user)
+            session = db.fetchone('SELECT * FROM poem_sessions WHERE id = %s', (sid,)) or session
+            cv = load_canvas(session)
         # Aim to fill ~6–10 slots per round; more empty → more rounds before asking
         if max_rounds is None:
             # Batch eval can cap rounds via env to finish 100 runs in reasonable time
             env_cap = os.environ.get('BATCH_MAX_FILL_ROUNDS', '').strip()
             if env_cap.isdigit():
                 rounds = max(3, min(24, int(env_cap)))
+            elif stage == 'link':
+                rounds = 3 if light_revise else 4
             elif light_revise:
                 # Seeded / nearly full: few light-revise rounds, then advance
                 rounds = 3 if stage != 'final' else 2
@@ -1717,9 +1876,14 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
             ratio0 = _fill_ratio(cv)
             empties_now = _empty_slots(cv)
             # Still have holes: do not early-exit light revise until they are filled or dropped
-            if light_revise and ratio0 >= 0.85 and stage != 'final' and round_i >= 1 and not empties_now:
+            if light_revise and ratio0 >= 0.85 and stage not in ('final', 'link') and round_i >= 1 and not empties_now:
                 yield sse_process(
                     _tr(lang, '底稿已满，结束本阶段轻改', 'Seeded draft full — end light revise'),
+                    kind='ok')
+                break
+            if light_revise and stage == 'link' and ratio0 >= 0.85 and round_i >= 2 and not empties_now:
+                yield sse_process(
+                    _tr(lang, '链接轮次完成', 'Link rounds done'),
                     kind='ok')
                 break
             op_lo, op_hi = ((2, 5) if light_revise else ((6, 12) if ratio0 < 0.55 else (4, 8)))
@@ -1740,7 +1904,19 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                     f'空槽必须按 slot_id 填（禁止再制造空DET）：{bits}\n'
                 )
             # Explicit current canvas text so model does not invent from stale memory
+            keyword_mode = stage in KEYWORD_STAGES
+            link_mode = stage == 'link'
+            locked = bool(cv.get('structure_locked'))
             if light_revise:
+                if keyword_mode:
+                    assoc_en = '(4) KEYWORD FOCUS: harvest/refine topic words; interconnect deferred to link stage.'
+                    assoc_zh = '(4) 关键词优先：贴题轻改即可，强关联留给 link 阶段。'
+                elif link_mode:
+                    assoc_en = '(4) LINK & LOCK: add ASSOCIATION hooks; tag hook type in intent; then structure locks.'
+                    assoc_zh = '(4) 构思链接：补强关联钩子，intent 标钩子类型；完成后结构锁定。'
+                else:
+                    assoc_en = '(4) STRUCTURE LOCKED polish only; ASSOCIATION if local fix needed; STYLE BANS.'
+                    assoc_zh = '(4) 结构已锁定，只润色；局部可补关联；禁不是…而是…/本身。'
                 fill_instr_en = (
                     f'Current stage {stage}. Fill ratio {ratio0:.0%}. {form_bit}\n'
                     f'Current canvas (LIGHT REVISE — keep the seeded draft):\n'
@@ -1751,9 +1927,10 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                     f'(2) Prefer replace on EXISTING filled slots; NEVER revise_syntax with blank slots; '
                     f'never create new empty DET/PREP chips.\n'
                     f'(3) Do NOT abandon the selected style-card breath or core images.\n'
-                    f'(4) ASSOCIATION hooks; STYLE BANS (no not…but / itself).\n'
-                    f'(5) Output {op_lo}-{op_hi} replace/fill JSON ops only — no init/rebuild.\n'
-                    f'(6) TOPIC FIT: stay on user topic.\n'
+                    f'{assoc_en}\n'
+                    f'(5) Output {op_lo}-{op_hi} replace/fill JSON ops only — no init/rebuild'
+                    + ('; no add_line/drop_line/reorder.' if locked or stage == 'final' else '.')
+                    + f'\n(6) TOPIC FIT: stay on user topic.\n'
                     f'User feedback: {extra_user or "none"}'
                 )
                 fill_instr_zh = (
@@ -1765,30 +1942,64 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                     f'(1) 若有空槽列表：必须先按 slot_id 填满，POS 匹配。\n'
                     f'(2) 优先 replace；禁止 revise_syntax 带空槽；禁止再造空 DET/PREP。\n'
                     f'(3) 禁止抛弃已选样例卡的呼吸与核心意象。\n'
-                    f'(4) 强关联；禁不是…而是…/本身强调。\n'
-                    f'(5) 输出{op_lo}-{op_hi}个 replace/fill JSON ops，禁止 init。\n'
-                    f'(6) 主题贴合用户意图。\n'
+                    f'{assoc_zh}\n'
+                    f'(5) 输出{op_lo}-{op_hi}个 replace/fill JSON ops，禁止 init'
+                    + ('；禁止增删行/大段调序。' if locked or stage == 'final' else '。')
+                    + f'\n(6) 主题贴合用户意图。\n'
                     f'用户反馈：{extra_user or "无"}'
                 )
             else:
+                if keyword_mode:
+                    rule2_en = (
+                        '(2) KEYWORD FOCUS: fill topic-fitting words; do NOT force ASSOCIATION hooks yet '
+                        '(link stage will interconnect). Tag intent as keyword notes OK.'
+                    )
+                    rule2_zh = (
+                        '(2) 关键词优先：填贴题词即可，本步不强制强关联钩子（link 阶段再链接）；'
+                        'intent 可写「词:…」。'
+                    )
+                    rule7_en = '(7) ANTI-STIFF: vary adjacent syntax; max one hard tension verb per line.'
+                    rule7_zh = '(7) 反死板：邻行句式须变奏；每行最多一个强张力动词。'
+                else:
+                    rule2_en = (
+                        '(2) Left-to-right: ASSOCIATION hooks (same-field / sense / cause / subject / contrast-formula). '
+                        'Grammar optional; cross-field salad = fail. Tag hook in intent '
+                        '(e.g. "same-field:rain-street|emotion:cold-wet"). '
+                        'Never end a line on the/a/an/of/in/from.'
+                    )
+                    rule2_zh = (
+                        '(2) 强关联：相邻意象须同场或同情绪公式（蒙太奇可以无语法粘合）；'
+                        'intent 标注钩子如「同场:雨夜街｜情绪:冷湿」；'
+                        '禁止跨场乱接；禁止行尾停在「的/了/着」。'
+                    )
+                    rule7_en = (
+                        '(7) ANTI-STIFF: vary adjacent syntax; max one hard tension verb per line; '
+                        'link images with ASSOCIATION hooks.'
+                    )
+                    rule7_zh = '(7) 反死板：邻行句式须变奏；每行最多一个强张力动词；补强关联钩子。'
+                lock_bit_en = (
+                    ' STRUCTURE LOCKED: no init/add_line/drop_line/wholesale reorder.'
+                    if locked or stage == 'final' else ''
+                )
+                lock_bit_zh = (
+                    ' 结构已锁定：禁止 init/增删行/大段 reorder。'
+                    if locked or stage == 'final' else ''
+                )
                 fill_instr_en = (
                     f'Current stage {stage}. Fill ratio {ratio0:.0%}. {form_bit}\n'
-                    f'Current canvas (edit only; do NOT init/rebuild/add_line/drop_line):\n'
+                    f'Current canvas (edit only; do NOT init/rebuild/add_line/drop_line):{lock_bit_en}\n'
                     f'{poem_canvas.canvas_to_text(cv, lang=lang)}\n'
                     f'HARD RULES:\n'
                     f'(1) ONE slot = ONE short word/phrase matching that slot POS — '
                     f'NEVER put a whole clause into one slot (no commas, no "then …").\n'
-                    f'(2) Left-to-right: ASSOCIATION hooks (same-field / sense / cause / subject / contrast-formula). '
-                    f'Grammar optional; cross-field salad = fail. Tag hook in intent '
-                    f'(e.g. \"same-field:rain-street|emotion:cold-wet\"). '
-                    f'Never end a line on the/a/an/of/in/from.\n'
+                    f'{rule2_en}\n'
                     f'(3) DUP REJECT: never reuse a content word in the poem; '
                     f'no glued doubles (presses presses / 绕出绕出). System rejects such ops.\n'
                     f'(4) Never duplicate an entire line.\n'
-                    f'(5) Output {op_lo}-{op_hi} fill/replace on EMPTY slots only.\n'
-                    f'(6) STYLE BANS: no "not … but …"; no itself/the very/本身/恰恰 emphasis crutches.\n'
-                    f'(7) ANTI-STIFF: vary adjacent syntax; max one hard tension verb per line; '
-                    f'link images with ASSOCIATION hooks.\n'
+                    f'(5) Output {op_lo}-{op_hi} fill/replace on EMPTY slots only'
+                    + (' (or replace to fix hooks).' if link_mode else '.')
+                    + f'\n(6) STYLE BANS: no "not … but …"; no itself/the very/本身/恰恰 emphasis crutches.\n'
+                    f'{rule7_en}\n'
                     f'(8) TOPIC FIT: images must serve the user topic; do not default to '
                     f'station/rail/bronze/frost-needle stock props unless asked.\n'
                     f'(9) No empty slots or □.\n'
@@ -1801,18 +2012,17 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                 )
                 fill_instr_zh = (
                     f'当前阶段 {stage}。完成度 {ratio0:.0%}。{form_bit}\n'
-                    f'当前画布（必须在此基础上改，禁止 init/add_line/drop_line）：\n'
+                    f'当前画布（必须在此基础上改，禁止 init/add_line/drop_line）：{lock_bit_zh}\n'
                     f'{poem_canvas.canvas_to_text(cv, lang=lang)}\n'
                     f'硬性要求：\n'
                     f'(1) 一槽一词/短词组，必须匹配该槽 POS；禁止把整句塞进一个槽（禁逗号、禁罗列）。\n'
-                    f'(2) 强关联：相邻意象须同场或同情绪公式（蒙太奇可以无语法粘合）；'
-                    f'intent 标注钩子如「同场:雨夜街｜情绪:冷湿」；'
-                    f'禁止跨场乱接；禁止行尾停在「的/了/着」。\n'
+                    f'{rule2_zh}\n'
                     f'(3) 叠词硬驳回：全诗实词不得重复；禁止绕出绕出/渗进渗进；系统会直接拒绝。\n'
                     f'(4) 禁止整行复制。\n'
-                    f'(5) 输出{op_lo}-{op_hi}个fill/replace填空槽。\n'
-                    f'(6) 风格禁忌：禁不是…而是…/not…but…；禁本身/itself 堆强调。\n'
-                    f'(7) 反死板：邻行句式须变奏；每行最多一个强张力动词。\n'
+                    f'(5) 输出{op_lo}-{op_hi}个fill/replace填空槽'
+                    + ('（或 replace 补钩子）。' if link_mode else '。')
+                    + f'\n(6) 风格禁忌：禁不是…而是…/not…but…；禁本身/itself 堆强调。\n'
+                    f'{rule7_zh}\n'
                     f'(8) 主题贴合：意象必须服务用户主题；非站台/铁路题材禁止默认「站牌/铁轨/铜钟/霜针/耳廓」套路。\n'
                     f'(9) 禁止空槽与「□」。\n'
                     + (
@@ -1895,6 +2105,12 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                 if kind == 'revise_syntax' and (cv.get('form_lock') or (form and form.get('lines'))):
                     yield sse_process(
                         _tr(lang, '体裁已锁，忽略整行重写', 'Form locked — ignored line rewrite'),
+                        kind='warn')
+                    continue
+                if (cv.get('structure_locked') or stage == 'final') and kind in (
+                        'init', 'canvas_init', 'add_line', 'drop_line', 'reorder'):
+                    yield sse_process(
+                        _tr(lang, '结构已锁定，忽略骨架改动', 'Structure locked — ignored scaffold edit'),
                         kind='warn')
                     continue
                 intent = op.get('intent') or op.get('念头') or ''
@@ -1997,21 +2213,29 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                             + (f' · {len(issues)} structure issues' if issues else '')),
                         kind='info')
                     yield sse('radar', g_scores)
-                    need_fix = coh_g < 52 or any(
-                        x.startswith(('hang_line', 'dup_line', 'bad_slot', 'line_count'))
+                    hard_struct = any(
+                        x.startswith(('hang_line', 'dup_line', 'bad_slot', 'line_count', 'line_chars'))
                         for x in issues
                     )
+                    # symbols/verbs: never force ASSOCIATION for low coherence
+                    if stage in KEYWORD_STAGES:
+                        need_fix = hard_struct
+                        repair_assoc = False
+                    else:
+                        need_fix = coh_g < 52 or hard_struct
+                        repair_assoc = True
                     if need_fix and run_still_valid(sid, token):
                         yield sse_process(
-                            _tr(lang, '强关联/结构偏弱，本轮强制修补',
-                                'Weak association/structure — forced repair this round'),
+                            _tr(lang,
+                                '强关联/结构偏弱，本轮强制修补' if repair_assoc else '结构硬伤本轮强制修补',
+                                'Weak association/structure — forced repair'
+                                if repair_assoc else 'Hard structure repair this round'),
                             kind='warn')
                         repair_msgs = build_context(
                             session, prefs, stage=stage, lang=lang, user_id=user_id)
                         issue_s = ', '.join(issues[:8]) if issues else 'coherence'
-                        repair_msgs.append({
-                            'role': 'user',
-                            'content': (
+                        if repair_assoc:
+                            repair_content = (
                                 f'ASSOCIATION / STRUCTURE REPAIR ({issue_s}). '
                                 'replace/fill ONLY — one short token per slot matching POS. '
                                 'Link neighboring images (space/sense/cause/subject/time); '
@@ -2027,7 +2251,25 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                                 f'已满行：\n{complete}\n'
                                 f'整幅画布：\n{poem_canvas.canvas_to_text(cv, lang=lang)}\n'
                                 '只输出4-10个 replace/fill JSON ops。'
-                            ),
+                            )
+                        else:
+                            repair_content = (
+                                f'STRUCTURE REPAIR ONLY ({issue_s}) — not association yet. '
+                                'replace/fill ONLY — fix hang/dup/meter; keep topic keywords. '
+                                'No add_line/drop_line/init. '
+                                f'Complete lines:\n{complete}\n'
+                                f'Canvas:\n{poem_canvas.canvas_to_text(cv, lang=lang)}\n'
+                                'Output 4-10 replace/fill JSON ops only.'
+                                if _lang_en(lang) else
+                                f'结构硬伤修复（{issue_s}）——本阶段不做强关联强修。'
+                                '只允许 replace/fill；修行尾/叠词/字数；保留贴题词。禁止增删行/init。\n'
+                                f'已满行：\n{complete}\n'
+                                f'整幅画布：\n{poem_canvas.canvas_to_text(cv, lang=lang)}\n'
+                                '只输出4-10个 replace/fill JSON ops。'
+                            )
+                        repair_msgs.append({
+                            'role': 'user',
+                            'content': repair_content,
                         })
                         rbuf = []
                         for delta, meta in llm.stream_complete_meta(
@@ -2040,6 +2282,8 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                             for op in poem_canvas.ensure_op_ids(rparsed.get('ops') or []):
                                 kind = op.get('type') or op.get('op') or ''
                                 if kind in ('init', 'canvas_init', 'add_line', 'drop_line'):
+                                    continue
+                                if (cv.get('structure_locked') or stage == 'final') and kind == 'reorder':
                                     continue
                                 cv, ok, _ = poem_canvas.apply_op(cv, op)
                                 if ok:
@@ -2061,7 +2305,9 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                 except Exception:
                     pass
                 yield sse_process(score_brief(scores, lang=lang), kind='info')
-                if ratio < 0.72 or float(scores.get('coherence') or 0) < 52:
+                # Early keyword stages: do not stall on low coherence
+                coh_floor = 40 if stage in KEYWORD_STAGES else 52
+                if ratio < 0.72 or float(scores.get('coherence') or 0) < coh_floor:
                     yield sse_process(
                         _tr(lang,
                             f'完成度 {ratio:.0%} / 逻辑 {scores.get("coherence", 0):.0f}，继续改',
@@ -2105,7 +2351,10 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                 cv = _drop_midline_empties(cv)
                 save_canvas(sid, cv)
                 yield sse('canvas', cv)
-            if not _empty_slots(cv) and _fill_ratio(cv) >= 0.92:
+            if (
+                    not _empty_slots(cv)
+                    and _fill_ratio(cv) >= 0.92
+                    and _meter_complete(cv)):
                 yield sse_process(
                     _tr(lang, '槽位已基本填满', 'Slots mostly filled'),
                     kind='ok')
@@ -2116,8 +2365,11 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
         poem_text = poem_canvas.canvas_filled_text(cv)
         scores = score_poem(poem_text, sid, target=target)
         ratio = _fill_ratio(cv)
-        # Keyword salad → force logic-repair rounds before stopping
-        if float(scores.get('coherence') or 0) < 55 and run_still_valid(sid, token):
+        # Keyword salad → force association repair ONLY at link/final (not symbols/verbs)
+        if (
+                stage in LINK_STAGES
+                and float(scores.get('coherence') or 0) < 55
+                and run_still_valid(sid, token)):
             yield sse_process(
                 _tr(lang, '逻辑偏弱，强制连贯修订', 'Logic weak — forced coherence revise'),
                 kind='warn')
@@ -2153,7 +2405,9 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                     continue
                 for op in poem_canvas.ensure_op_ids(parsed.get('ops') or []):
                     kind = op.get('type') or op.get('op') or ''
-                    if kind in ('init', 'canvas_init'):
+                    if kind in ('init', 'canvas_init', 'add_line', 'drop_line'):
+                        continue
+                    if stage == 'final' and kind == 'reorder':
                         continue
                     cv, ok, _ = poem_canvas.apply_op(cv, op)
                     if ok:
@@ -2166,6 +2420,26 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                 yield sse_process(score_brief(scores, lang=lang), kind='info')
                 if float(scores.get('coherence') or 0) >= 55:
                     break
+        elif stage in KEYWORD_STAGES and float(scores.get('coherence') or 0) < 55:
+            yield sse_process(
+                _tr(lang,
+                    '关键词阶段：暂缓强关联修订（留给 link）',
+                    'Keyword stage: defer association repair to link'),
+                kind='info')
+
+        # After link fills: lock structure for final polish
+        if stage == 'link' and run_still_valid(sid, token):
+            cv = load_canvas(session)
+            cv['structure_locked'] = True
+            cv['form_lock'] = True
+            save_canvas(sid, cv)
+            meta_lock = load_stage_meta(session)
+            meta_lock['structure_locked'] = True
+            save_stage_meta(sid, meta_lock)
+            yield sse('canvas', cv)
+            yield sse_process(
+                _tr(lang, '结构已锁定，进入定稿润色', 'Structure locked — ready to polish'),
+                kind='ok')
 
         # Final stage: whole-poem polish locked to selected style card
         if stage == 'final' and run_still_valid(sid, token):
@@ -2190,7 +2464,10 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                 for s in (ln.get('slots') or [])
                 if not (s.get('text') or '').strip()
             )
-            if still and not (cv.get('form_lock') or cv.get('seeded_from_example')):
+            if still and not (
+                    cv.get('form_lock')
+                    or cv.get('seeded_from_example')
+                    or poem_canvas._regulated_meter(cv)):
                 cv = poem_canvas.canvas_compact_empties(cv)
                 still = 0
             save_canvas(sid, cv)
@@ -2222,28 +2499,10 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
         yield sse_process(_tr(lang, '本阶段画布完成', 'Stage canvas done'), kind='ok')
 
         coh = float(scores.get('coherence') or 0)
-        decision = ckpt.gate_decision(
-            scores, target,
-            recent_rejects=recent_rejects,
-            vague_user=ckpt.user_message_vague(extra_user),
-            soft_ask_skips=soft_skips,
-            filled_ratio=ratio,
-            kind='fill',
-        )
-        # Prefer auto-advance: don't stall the pipeline unless truly uncertain & coherent enough to judge
-        should_auto = (
-            ratio >= 0.65 and coh >= 52 and (
-                decision['action'] == 'auto'
-                or soft_skips >= 1
-                or float(scores.get('fit') or 0) >= 62
-                or coh >= 65
-            )
-        )
-        # Seeded / light-revise path: never chain symbols→verbs→final in one turn
-        if light_revise or seeded or cv.get('seeded_from_example'):
-            should_auto = False
-        if should_auto:
-            nxt = {'structure': 'symbols', 'symbols': 'verbs', 'verbs': 'final'}.get(stage)
+        # NEVER chain symbols→verbs→link→final in one HTTP turn — always pause for the user.
+        # (Previously should_auto + recursive _stream_canvas_loop skipped mid-stage stops.)
+        if stage in ('symbols', 'verbs', 'link'):
+            nxt = {'symbols': 'verbs', 'verbs': 'link', 'link': 'final'}.get(stage)
             if nxt:
                 db.execute(
                     'UPDATE poem_sessions SET stage = %s, run_status = %s, checkpoint_id = NULL, '
@@ -2251,28 +2510,29 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
                     (nxt, 'idle', sid))
                 yield sse('stage', {'stage': nxt, 'label': stage_label(nxt, lang=lang)})
                 yield sse_process(
-                    _tr(lang, f'自动进入：{stage_label(nxt, lang=lang)}',
-                        f'Auto-advance: {stage_label(nxt, lang=lang)}'),
+                    _tr(lang,
+                        f'下一阶段将是：{stage_label(nxt, lang=lang)}（请确认后继续）',
+                        f'Next: {stage_label(nxt, lang=lang)} (confirm to continue)'),
                     kind='ok')
-                session = db.fetchone('SELECT * FROM poem_sessions WHERE id = %s', (sid,))
-                # Keep going in the same turn so the pipeline does not stall
-                yield from _stream_canvas_loop(
-                    session, prefs, nxt, temperature=temperature,
-                    extra_user=extra_user, lang=lang, user_id=user_id, mode='fill')
-                return
-            set_idle(sid)
+            set_awaiting(sid, 'stage_review', token)
+            ask = _tr(
+                lang,
+                f'【{stage_label(stage, lang=lang)}】完成 · 综合{scores.get("overall", 0):.0f}'
+                f'（逻辑{coh:.0f}·拟合{scores.get("fit", 0):.0f}）。'
+                f'确认进入「{stage_label(nxt, lang=lang) if nxt else stage_label("final", lang=lang)}」，或说明想改哪里。',
+                f'[{stage_label(stage, lang=lang)}] done · overall {scores.get("overall", 0):.0f} '
+                f'(logic {coh:.0f} · fit {scores.get("fit", 0):.0f}). '
+                f'Confirm to enter {stage_label(nxt, lang=lang) if nxt else "final"}, or say what to tweak.',
+            )
+            yield sse('checkpoint', {'id': 'stage_review', 'message': ask})
+            yield sse_process(ask, waiting=True, kind='ask')
+            append_chat(sid, 'assistant', ask)
+            yield sse('message', {'role': 'assistant', 'content': ask})
             return
 
-        # Seeded: advance stage pointer but wait for user before next fill
-        if (light_revise or seeded or cv.get('seeded_from_example')) and stage in (
-                'symbols', 'verbs'):
-            nxt = {'symbols': 'verbs', 'verbs': 'final'}.get(stage)
-            if nxt:
-                db.execute(
-                    'UPDATE poem_sessions SET stage = %s, run_status = %s, checkpoint_id = NULL, '
-                    'updated_at = CURRENT_TIMESTAMP WHERE id = %s',
-                    (nxt, 'idle', sid))
-                yield sse('stage', {'stage': nxt, 'label': stage_label(nxt, lang=lang)})
+        if stage == 'final':
+            set_idle(sid)
+            return
 
         set_awaiting(sid, 'stage_review', token)
         ask = _tr(
@@ -2283,6 +2543,9 @@ def _stream_canvas_loop(session, prefs, stage, temperature=0.7, extra_user=None,
         )
         yield sse('checkpoint', {'id': 'stage_review', 'message': ask})
         yield sse_process(ask, waiting=True, kind='ask')
+        append_chat(sid, 'assistant', ask)
+        yield sse('message', {'role': 'assistant', 'content': ask})
+        return
     except GeneratorExit:
         interrupt_session(user_id, sid) if user_id else set_idle(sid)
         raise
@@ -2326,12 +2589,46 @@ def _drop_midline_empties(cv):
     return cv2
 
 
+def _meter_seat_count(cv):
+    """Expected slot count for regulated forms (lines × chars_per_line)."""
+    cv = cv or {}
+    cpl = cv.get('chars_per_line')
+    fid = cv.get('verse_form') or ''
+    if not cpl and fid in ('wuyan_lushi', 'qiyan_lushi', 'wuyan_jueju', 'qiyan_jueju'):
+        cpl = 5 if 'wuyan' in fid else 7
+    if not cpl:
+        return 0
+    n_lines = len(cv.get('lines') or [])
+    form = verse_form.FORMS.get(fid) if fid else None
+    if form and form.get('lines'):
+        n_lines = max(n_lines, int(form['lines']))
+    return max(n_lines, 1) * int(cpl)
+
+
 def _fill_ratio(cv):
-    slots = [s for ln in (cv.get('lines') or []) for s in (ln.get('slots') or [])]
+    """Filled / seats. For 格律, seats = lines×字/句 so 8×1 filled junk ≠ 100%."""
+    slots = [s for ln in ((cv or {}).get('lines') or []) for s in (ln.get('slots') or [])]
+    filled = sum(1 for s in slots if (s.get('text') or '').strip())
+    expected = _meter_seat_count(cv)
+    if expected:
+        return filled / expected
     if not slots:
         return 0.0
-    filled = sum(1 for s in slots if (s.get('text') or '').strip())
     return filled / len(slots)
+
+
+def _meter_complete(cv):
+    """True when regulated canvas has full-width lines (or non-regulated)."""
+    if not poem_canvas._regulated_meter(cv):
+        return True
+    cpl = int((cv or {}).get('chars_per_line') or 0)
+    if not cpl:
+        fid = (cv or {}).get('verse_form') or ''
+        cpl = 5 if 'wuyan' in fid else 7
+    for ln in ((cv or {}).get('lines') or []):
+        if len(ln.get('slots') or []) != cpl:
+            return False
+    return True
 
 
 def _lang_en(lang):
@@ -2368,14 +2665,26 @@ def _canvas_skeleton_round(session, prefs, sid, token, temperature, extra_user, 
     row = db.fetchone('SELECT * FROM poem_sessions WHERE id = %s', (sid,)) or session
     form = verse_form.detect_verse_form(row, extra_user=extra_user)
     meta = load_stage_meta(row)
+    # Upgrade weak quatrain lock using selected card poem shape
+    sel0 = meta.get('selected_example') if isinstance(meta.get('selected_example'), dict) else None
+    if sel0 and (sel0.get('poem') or '').strip():
+        shape = verse_form.infer_form_from_poem(sel0['poem'])
+        if shape and (
+                not form or form.get('id') in ('free', 'quatrain', 'couplet')
+                or (shape.get('chars_per_line') and not (form or {}).get('chars_per_line'))):
+            form = shape
     if form and form.get('id') != 'free':
         meta['verse_form'] = form['id']
         save_stage_meta(sid, meta)
         yield sse_process(
             _tr(lang,
-                f'体裁锁定：{form["id"]}（目标 {form.get("lines") or str(form.get("line_min"))+"–"+str(form.get("line_max"))} 行）',
+                f'体裁锁定：{form["id"]}（目标 {form.get("lines") or str(form.get("line_min"))+"–"+str(form.get("line_max"))} 行'
+                + (f'×每句{form.get("chars_per_line")}字' if form.get('chars_per_line') else '')
+                + '）',
                 f'Form locked: {form["id"]} '
-                f'(target {form.get("lines") or str(form.get("line_min"))+"–"+str(form.get("line_max"))} lines)'),
+                f'(target {form.get("lines") or str(form.get("line_min"))+"–"+str(form.get("line_max"))} lines'
+                + (f' × {form.get("chars_per_line")} chars/line' if form.get('chars_per_line') else '')
+                + ')'),
             kind='ok')
     form_line = verse_form.form_instruction(form, lang=lang)
 
@@ -2436,9 +2745,20 @@ def _canvas_skeleton_round(session, prefs, sid, token, temperature, extra_user, 
                 kind='info')
             add_node(sid, session.get('current_node_id'), intent, poem_text, scores, 'structure')
             yield sse_process(
-                _tr(lang, '样例底稿已导入，继续轻改', 'Card seed imported — continuing to light revise'),
+                _tr(lang, '样例底稿已导入 — 请确认后再轻改',
+                    'Card seed imported — confirm before light revise'),
                 kind='ok')
             db.execute("UPDATE poem_sessions SET stage = 'symbols' WHERE id = %s", (sid,))
+            set_awaiting(sid, 'stage_review', token)
+            ask = _tr(
+                lang,
+                '底稿已按样例卡导入。确认后进入「长意象」轻改，或说明想改的行。',
+                'Draft seeded from the style card. Confirm to enter imagery revise, or say what to change.',
+            )
+            yield sse('checkpoint', {'id': 'stage_review', 'message': ask})
+            yield sse_process(ask, waiting=True, kind='ask')
+            append_chat(sid, 'assistant', ask)
+            yield sse('message', {'role': 'assistant', 'content': ask})
             return
 
     # Fixed forms (sonnet=14, haiku=3, …): never trust LLM for line count
@@ -2478,9 +2798,25 @@ def _canvas_skeleton_round(session, prefs, sid, token, temperature, extra_user, 
             kind='info')
         add_node(sid, session.get('current_node_id'), intent, poem_text, scores, 'structure')
         yield sse_process(
-            _tr(lang, '骨架可接受，自动继续填词', 'Skeleton looks fine — continuing to fill'),
+            _tr(lang, '锁定骨架已立 — 请确认后填词',
+                'Locked skeleton ready — confirm before fill'),
             kind='ok')
         db.execute("UPDATE poem_sessions SET stage = 'symbols' WHERE id = %s", (sid,))
+        set_awaiting(sid, 'skeleton_ready', token)
+        ask = _tr(
+            lang,
+            f'已立【{form.get("id")}】骨架。确认后进入「长意象」，或说明想改的行/疏密。',
+            f'{form.get("id")} skeleton is up. Confirm to enter imagery, or say which lines/density to change.',
+        )
+        yield sse('checkpoint', {
+            'id': 'skeleton_ready',
+            'message': ask,
+            'reason': 'form_skeleton',
+            'deviation': None,
+        })
+        yield sse_process(ask, waiting=True, kind='ask')
+        append_chat(sid, 'assistant', ask)
+        yield sse('message', {'role': 'assistant', 'content': ask})
         return
 
     messages = build_context(row, prefs, stage='structure', lang=lang, user_id=user_id)
@@ -2699,11 +3035,27 @@ def _canvas_skeleton_round(session, prefs, sid, token, temperature, extra_user, 
         }
 
     if decision['action'] == 'auto':
+        # Still pause — do not fill symbols in the same turn as structure
         yield sse_process(
-            _tr(lang, '骨架可接受，自动继续填词', 'Skeleton looks fine — continuing to fill'),
+            _tr(lang, '骨架可接受 — 请确认后开始填词',
+                'Skeleton looks fine — confirm to start filling'),
             kind='ok')
         db.execute("UPDATE poem_sessions SET stage = 'symbols' WHERE id = %s", (sid,))
-        # Keep same run token valid for subsequent fill rounds in caller
+        set_awaiting(sid, 'skeleton_ready', token)
+        ask = _tr(
+            lang,
+            '骨架已通过检查。确认后进入「长意象」填词，或说明想改的行/疏密。',
+            'Skeleton passed checks. Confirm to enter imagery fill, or say which lines/density to change.',
+        )
+        yield sse('checkpoint', {
+            'id': 'skeleton_ready',
+            'message': ask,
+            'reason': decision['reason'],
+            'deviation': decision.get('deviation'),
+        })
+        yield sse_process(ask, waiting=True, kind='ask')
+        append_chat(sid, 'assistant', ask)
+        yield sse('message', {'role': 'assistant', 'content': ask})
         return
 
     set_awaiting(sid, 'skeleton_ready', token)
@@ -2723,6 +3075,72 @@ def _canvas_skeleton_round(session, prefs, sid, token, temperature, extra_user, 
     yield sse('message', {'role': 'assistant', 'content': ask})
 
 
+def _link_plan_round(session, prefs, sid, token, cv, form, lang, user_id, extra_user=None):
+    """Ask model for a short link/structure plan; store in stage_meta.link_plan."""
+    en = _lang_en(lang)
+    yield sse_process(
+        _tr(lang, '构思链接提纲…', 'Drafting link plan…'),
+        kind='ok')
+    messages = build_context(session, prefs, stage='link', lang=lang, user_id=user_id)
+    form_bit = verse_form.form_instruction(form, lang=lang) if form else ''
+    current = poem_canvas.canvas_readable_text(cv, lang=lang) or poem_canvas.canvas_to_text(cv, lang=lang)
+    if en:
+        messages.append({
+            'role': 'user',
+            'content': (
+                f'{form_bit}\n'
+                'LINK PLAN ONLY (no JSON ops yet): write ≤80 chars — emotional arc by line + '
+                'hook types between images (same-field/sense/cause/subject/contrast). '
+                f'Current draft:\n{current}\n'
+                f'User note: {extra_user or "none"}'
+            ),
+        })
+    else:
+        messages.append({
+            'role': 'user',
+            'content': (
+                f'{form_bit}\n'
+                '【仅写链接提纲】不超过80字：按行情绪弧 + 相邻意象钩子类型'
+                '（同场/感官/因果/主体/对照）。不要输出 ops。\n'
+                f'当前稿：\n{current}\n'
+                f'用户备注：{extra_user or "无"}'
+            ),
+        })
+    buf = []
+    for delta, meta_llm in llm.stream_complete_meta(
+            messages, role='link', temperature=0.5):
+        if not run_still_valid(sid, token):
+            return
+        buf.append(delta)
+    plan = ''.join(buf).strip()
+    # Strip accidental JSON wrapper
+    plan = re.sub(r'^```(?:\w+)?\s*', '', plan)
+    plan = re.sub(r'\s*```$', '', plan).strip()
+    if len(plan) > 200:
+        # Prefer summary field if model dumped JSON
+        try:
+            parsed = poem_canvas.parse_ops_json(plan)
+            if isinstance(parsed, dict) and parsed.get('summary'):
+                plan = str(parsed.get('summary'))[:200]
+            else:
+                plan = plan[:200]
+        except Exception:
+            plan = plan[:200]
+    if not plan:
+        plan = _tr(lang, '同场推进；起承转合', 'Same-field arc; rise–turn–close')
+    meta = load_stage_meta(session)
+    meta['link_plan'] = plan
+    save_stage_meta(sid, meta)
+    append_chat(sid, 'assistant', _tr(lang, f'链接提纲：{plan}', f'Link plan: {plan}'))
+    yield sse('message', {
+        'role': 'assistant',
+        'content': _tr(lang, f'链接提纲：{plan}', f'Link plan: {plan}'),
+    })
+    yield sse_process(
+        _tr(lang, f'提纲已记：{plan[:60]}', f'Plan saved: {plan[:60]}'),
+        kind='ok')
+
+
 def _final_whole_poem_polish(session, prefs, sid, token, cv, form, lang, user_id, target):
     """One whole-poem polish pass locked to selected style card; rewrite canvas from result."""
     en = _lang_en(lang)
@@ -2735,6 +3153,17 @@ def _final_whole_poem_polish(session, prefs, sid, token, cv, form, lang, user_id
     seed_poem = (sel.get('poem') or '') if isinstance(sel, dict) else ''
     form_bit = verse_form.form_instruction(form, lang=lang) if form else ''
     cpl = (form or {}).get('chars_per_line')
+    link_plan = (meta.get('link_plan') or '')[:160]
+    locked = bool(cv.get('structure_locked') or meta.get('structure_locked'))
+    lock_note_en = (
+        'STRUCTURE IS LOCKED from link stage — polish diction only; keep line count and order. '
+        f'Link plan: {link_plan or "(none)"}. '
+        if locked else ''
+    )
+    lock_note_zh = (
+        f'结构已在 link 锁定——只润色用词，保持行数与行序。链接提纲：{link_plan or "（无）"}。'
+        if locked else ''
+    )
 
     def _polish_once(extra_ban=''):
         messages = build_context(session, prefs, stage='final', lang=lang, user_id=user_id)
@@ -2742,11 +3171,11 @@ def _final_whole_poem_polish(session, prefs, sid, token, cv, form, lang, user_id
             messages.append({
                 'role': 'user',
                 'content': (
-                    f'{form_bit}\n'
+                    f'{form_bit}\n{lock_note_en}'
                     'WHOLE-POEM POLISH: Output ONLY the polished poem body (no JSON, no commentary). '
                     'Quality must match or exceed the selected style card. '
                     'Keep the same breath, core images, and approximate line count; '
-                    'fix associations; HARD BAN duplicate content words and reduplication '
+                    'fix associations only locally; HARD BAN duplicate content words and reduplication '
                     '(no "word word", no 窗窗 / 挑尽挑尽). '
                     f'{extra_ban}\n'
                     f'Selected card poem:\n{seed_poem or "(none)"}\n\n'
@@ -2757,10 +3186,11 @@ def _final_whole_poem_polish(session, prefs, sid, token, cv, form, lang, user_id
             messages.append({
                 'role': 'user',
                 'content': (
-                    f'{form_bit}\n'
+                    f'{form_bit}\n{lock_note_zh}'
                     '【整首润色】只输出润色后的诗正文（不要JSON、不要点评）。'
                     '完成度须不低于所选样例卡；保持呼吸、核心意象与大致行数；'
-                    '补强关联；硬禁叠字叠词（禁窗窗/凉凉/挑尽挑尽/同行复用同一实字）。'
+                    '局部补强关联即可；硬禁叠字叠词（禁窗窗/凉凉/挑尽挑尽/同行复用同一实字）。'
+                    '若为格律：保持近体语体与每句字数，禁止润成现代自由诗。'
                     f'{extra_ban}\n'
                     f'样例卡诗：\n{seed_poem or "（无）"}\n\n'
                     f'当前稿：\n{current}\n'
@@ -2789,7 +3219,12 @@ def _final_whole_poem_polish(session, prefs, sid, token, cv, form, lang, user_id
         if evaluate.has_heavy_repetition(p):
             return True
         if cpl and not en:
-            for ln in [x.strip() for x in p.splitlines() if x.strip()]:
+            lines = verse_form.split_zh_verse_lines(p)
+            if not lines:
+                lines = [x.strip() for x in p.splitlines() if x.strip()]
+            if form and form.get('lines') and len(lines) != int(form['lines']):
+                return True
+            for ln in lines:
                 n = len(re.findall(r'[\u4e00-\u9fff]', ln))
                 if n != int(cpl):
                     return True
@@ -2813,6 +3248,26 @@ def _final_whole_poem_polish(session, prefs, sid, token, cv, form, lang, user_id
         if poem2 and not _poem_bad(poem2):
             poem = poem2
         else:
+            # Prefer falling back to the style card rather than a meter-broken draft
+            if seed_poem and cpl:
+                card_cv = poem_canvas.seed_canvas_from_poem(seed_poem, form=form, lang=lang)
+                if card_cv and card_cv.get('lines'):
+                    card_cv['seeded_from_example'] = True
+                    if form and form.get('lines'):
+                        card_cv['form_lock'] = True
+                        card_cv['verse_form'] = form.get('id')
+                    if cpl:
+                        card_cv['chars_per_line'] = int(cpl)
+                    save_canvas(sid, card_cv)
+                    poem_text = poem_canvas.canvas_readable_text(card_cv, lang=lang)
+                    yield sse('canvas', card_cv)
+                    yield sse('poem', {
+                        'from': current, 'to': poem_text or '', 'full': poem_text or ''})
+                    yield sse_process(
+                        _tr(lang, '润色不合格，回退为样例卡底稿',
+                            'Polish failed meter — restored style-card draft'),
+                        kind='warn')
+                    return
             yield sse_process(
                 _tr(lang, '润色仍有叠词，保留润色前稿',
                     'Polish still repetitive — keeping pre-polish draft'),
@@ -2828,10 +3283,16 @@ def _final_whole_poem_polish(session, prefs, sid, token, cv, form, lang, user_id
         polished_cv['form_lock'] = True
         if form and form.get('id'):
             polished_cv['verse_form'] = form.get('id')
-        if cpl:
-            polished_cv['chars_per_line'] = int(cpl)
+    if cpl:
+        polished_cv['chars_per_line'] = int(cpl)
     if cv.get('seeded_from_example'):
         polished_cv['seeded_from_example'] = True
+    # Keep structure lock after polish rewrite
+    if locked or cv.get('structure_locked') or meta.get('structure_locked'):
+        polished_cv['structure_locked'] = True
+        polished_cv['form_lock'] = True
+        meta['structure_locked'] = True
+        save_stage_meta(sid, meta)
     readable = poem_canvas.canvas_readable_text(polished_cv, lang=lang)
     if evaluate.has_heavy_repetition(readable, polished_cv):
         yield sse_process(
@@ -2851,7 +3312,7 @@ def _final_whole_poem_polish(session, prefs, sid, token, cv, form, lang, user_id
 
 def _canvas_degrade_fill(session, prefs, sid, token, stage, lang, user_id):
     messages = build_context(session, prefs, stage=stage, lang=lang, user_id=user_id)
-    role = {'symbols': 'symbols', 'verbs': 'verb', 'final': 'logic'}.get(stage, 'verb')
+    role = {'symbols': 'symbols', 'verbs': 'verb', 'link': 'link', 'final': 'logic'}.get(stage, 'verb')
     buf = []
     for delta, meta in llm.stream_complete_meta(messages, role=role, temperature=0.7):
         if not run_still_valid(sid, token):

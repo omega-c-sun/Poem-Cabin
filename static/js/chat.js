@@ -65,7 +65,8 @@
 
   // needRdr -> 起草阶段才显示雷达
   function needRdr(st) {
-    return st === 'structure' || st === 'symbols' || st === 'verbs' || st === 'final';
+    return st === 'structure' || st === 'symbols' || st === 'verbs'
+      || st === 'link' || st === 'final';
   }
 
   // dBar -> 示例卡七维短条

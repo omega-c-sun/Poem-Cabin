@@ -92,9 +92,14 @@ def canvas_filled_text(canvas, lang=None):
 
 
 def canvas_compact_empties(canvas):
-    """Drop empty slots and blank lines so □ cannot leak into the poem."""
+    """Drop empty slots and blank lines so □ cannot leak into the poem.
+
+    Regulated Chinese meter seats must never be dropped.
+    """
     from copy import deepcopy
     cv = deepcopy(canvas or empty_canvas())
+    if _regulated_meter(cv):
+        return ensure_regulated_width(normalize_canvas(cv))
     new_lines = []
     for li, line in enumerate(cv.get('lines') or []):
         slots = []
@@ -113,10 +118,89 @@ def canvas_compact_empties(canvas):
     return cv
 
 
-def canvas_compact_empties_soft(canvas):
-    """Drop empty slots inside non-empty lines; keep line count when form_lock / seeded."""
+_REGULATED_FORM_IDS = frozenset({
+    'wuyan_lushi', 'qiyan_lushi', 'wuyan_jueju', 'qiyan_jueju',
+})
+
+
+def _regulated_meter(canvas):
+    cv = canvas or {}
+    if cv.get('chars_per_line'):
+        return True
+    return (cv.get('verse_form') or '') in _REGULATED_FORM_IDS
+
+
+def ensure_regulated_width(canvas):
+    """Pad / trim each line to chars_per_line one-char seats (never collapse to 1 slot)."""
     from copy import deepcopy
     cv = deepcopy(canvas or empty_canvas())
+    cpl = cv.get('chars_per_line')
+    fid = cv.get('verse_form') or ''
+    if not cpl and fid in _REGULATED_FORM_IDS:
+        cpl = 5 if 'wuyan' in fid else 7
+        cv['chars_per_line'] = int(cpl)
+    if not cpl:
+        return normalize_canvas(cv)
+    cpl = int(cpl)
+    patterns_5 = ['N', 'V', 'N', 'V', 'N']
+    patterns_7 = ['N', 'V', 'N', 'V', 'N', 'V', 'N']
+    pat0 = patterns_5 if cpl == 5 else patterns_7
+    # Target line count from form id when known
+    target_lines = None
+    if fid == 'wuyan_lushi' or fid == 'qiyan_lushi':
+        target_lines = 8
+    elif fid in ('wuyan_jueju', 'qiyan_jueju'):
+        target_lines = 4
+    lines_in = list(cv.get('lines') or [])
+    if target_lines and len(lines_in) < target_lines:
+        while len(lines_in) < target_lines:
+            lines_in.append({'slots': []})
+    new_lines = []
+    for li, line in enumerate(lines_in):
+        old = line.get('slots') or []
+        # Keep filled chars in order (one char each for regulated)
+        chars = []
+        for s in old:
+            t = (s.get('text') or '').strip()
+            if not t:
+                continue
+            for ch in re.findall(r'[\u4e00-\u9fff]', t) or ([t] if t else []):
+                chars.append((ch, normalize_pos(s.get('pos') or 'N')))
+                if len(chars) >= cpl:
+                    break
+            if len(chars) >= cpl:
+                break
+        slots = []
+        for j in range(cpl):
+            if j < len(chars):
+                ch, pos = chars[j]
+                slots.append({
+                    'id': f'L{li}S{j}',
+                    'pos': pos or normalize_pos(pat0[j % len(pat0)]),
+                    'text': ch,
+                    'status': 'filled',
+                })
+            else:
+                slots.append({
+                    'id': f'L{li}S{j}',
+                    'pos': normalize_pos(pat0[j % len(pat0)]),
+                    'text': '',
+                    'status': 'empty',
+                })
+        new_lines.append({'slots': _ensure_line_has_v(slots)})
+    cv['lines'] = new_lines
+    return normalize_canvas(cv)
+
+
+def canvas_compact_empties_soft(canvas):
+    """Drop empty slots inside non-empty lines; keep line count when form_lock / seeded.
+
+    Regulated Chinese (chars_per_line / 五七言): NEVER drop empty slots — they are meter seats.
+    """
+    from copy import deepcopy
+    cv = deepcopy(canvas or empty_canvas())
+    if _regulated_meter(cv):
+        return ensure_regulated_width(cv)
     keep_empty_lines = bool(cv.get('form_lock') or cv.get('seeded_from_example'))
     new_lines = []
     for line in (cv.get('lines') or []):
@@ -242,16 +326,27 @@ def seed_canvas_from_poem(poem_text, form=None, lang=None):
     Aligns line count / chars_per_line when a fixed form is given.
     Marks seeded_from_example=True for downstream light-revise / soft-compact.
     """
-    raw_lines = [ln.strip() for ln in (poem_text or '').splitlines() if ln.strip()]
-    if not raw_lines:
+    import verse_form as _vf
+
+    sample_raw = (poem_text or '').strip()
+    if not sample_raw:
         return None
 
     en = (lang or 'zh').startswith('en')
     if not en:
         # Detect English poem even under zh UI
-        sample = ' '.join(raw_lines[:3])
-        if re.search(r'[A-Za-z]', sample) and not re.search(r'[\u4e00-\u9fff]', sample):
+        if re.search(r'[A-Za-z]', sample_raw) and not re.search(r'[\u4e00-\u9fff]', sample_raw):
             en = True
+
+    # Classical Chinese cards often store 4 lines as one string with ，。
+    if en:
+        raw_lines = [ln.strip() for ln in sample_raw.splitlines() if ln.strip()]
+    else:
+        raw_lines = _vf.split_zh_verse_lines(sample_raw)
+        if not raw_lines:
+            raw_lines = [ln.strip() for ln in sample_raw.splitlines() if ln.strip()]
+    if not raw_lines:
+        return None
 
     target_n = None
     cpl = None
@@ -261,6 +356,16 @@ def seed_canvas_from_poem(poem_text, form=None, lang=None):
             target_n = int(form['lines'])
         cpl = form.get('chars_per_line')
         fid = form.get('id')
+
+    # If form missing but poem is clearly 4×7 / 8×5, adopt that form
+    if not cpl or not target_n:
+        inferred = _vf.infer_form_from_poem(sample_raw)
+        if inferred:
+            if not form or (form.get('id') in (None, 'free', 'quatrain', 'couplet')):
+                form = inferred
+                target_n = int(inferred.get('lines') or target_n or 0) or None
+                cpl = inferred.get('chars_per_line') or cpl
+                fid = inferred.get('id') or fid
 
     lines = list(raw_lines)
     if target_n:
@@ -293,7 +398,7 @@ def seed_canvas_from_poem(poem_text, form=None, lang=None):
             ['ADV', 'V', 'N', 'V', 'N', 'V', 'N'],
         ]
         patterns = patterns_5 if int(cpl) == 5 else patterns_7
-        used_chars = set()
+        # Regulated Chinese: one slot = one character — keep card text; only collapse AABB/叠字
         for li, ln in enumerate(lines):
             zh = re.findall(r'[\u4e00-\u9fff]', ln)
             # Collapse immediate 叠字/叠词 before slotting (挑尽挑尽→挑尽, 窗窗→窗)
@@ -322,15 +427,13 @@ def seed_canvas_from_poem(poem_text, form=None, lang=None):
             prev_ch = ''
             for j in range(int(cpl)):
                 ch = zh[j] if j < len(zh) else ''
-                # Skip poem-wide / adjacent content-char dups (格律叠字硬拦)
-                if ch and ch not in _FUNCTION_ZH_DUP:
-                    if ch == prev_ch or ch in used_chars:
-                        ch = ''
-                    else:
-                        used_chars.add(ch)
+                # Only strip immediate adjacent 叠字 on this line — do NOT blank
+                # poem-wide unique chars (律诗样例卡必须整句保留，否则后面被压成一字行)
+                if ch and ch == prev_ch and ch not in _FUNCTION_ZH_DUP:
+                    ch = ''
                 if ch:
                     prev_ch = ch
-                elif not ch:
+                else:
                     prev_ch = ''
                 pos = pat[j] if j < len(pat) else 'N'
                 slots.append({
@@ -901,8 +1004,8 @@ def apply_op(canvas, op):
         return canvas, True, 'add_line'
 
     if kind == 'revise_syntax':
-        if canvas.get('form_lock'):
-            # Locked forms: never rewrite whole lines (collapses 14-line frames)
+        if canvas.get('form_lock') or _regulated_meter(canvas):
+            # Locked / 格律: never rewrite whole lines (collapses 5/7 seats to 1)
             return canvas, False, 'form_locked'
         # Replace whole line slots
         idx = op.get('line_index', 0)

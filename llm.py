@@ -95,6 +95,10 @@ def _fallback(role, messages):
         'structure': '体裁：自由诗\n字数序列：7-7-3-3-7-7\n主韵：ang\n禁忌：否定式',
         'symbols': '主体四维：抽象/流变/内在分裂\n测试句：时针的步履在桌沿变沉',
         'verb': '稀薄的余晖沉一寸尘埃\n未命名的一行漫半屏冷光',
+        'link': (
+            '{"summary":"同场:暮江｜起承转合",'
+            '"ops":[{"type":"replace","slot_id":"L0S2","text":"照","pos":"V","intent":"同场:光"}]}'
+        ),
         'logic': '稀薄的余晖沉一寸尘埃\n未命名的一行漫半屏冷光\n骤然间\n空阔的回声',
         'status': '情绪偏压抑；张力偏好偏高；下一步锁定主韵。',
         'thought': '升tension：单字动词沉/漫，锁定主韵ang。',
