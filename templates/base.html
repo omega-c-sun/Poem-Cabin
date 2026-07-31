@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ t('brand') }}{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=7d6">
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script>
+    // renderMath -> KaTeX 渲染公式
+    window.renderMath = function (el) {
+      if (!window.renderMathInElement) return;
+      renderMathInElement(el || document.body, {
+        delimiters: [
+          {left: '$$', right: '$$', display: true},
+          {left: '\\[', right: '\\]', display: true},
+          {left: '$', right: '$', display: false},
+          {left: '\\(', right: '\\)', display: false}
+        ],
+        throwOnError: false
+      });
+    };
+    // renderMessage -> MD+净化；流式时只贴纯文本
+    window.renderMessage = function (el, txt, streaming) {
+      if (!el) return;
+      txt = txt || '';
+      el.setAttribute('data-raw', txt);
+      if (streaming) {
+        el.textContent = txt;
+        return;
+      }
+      if (!window.marked || !window.DOMPurify) {
+        el.textContent = txt;
+        return;
+      }
+      try {
+        var html = marked.parse(txt, { breaks: true });
+        el.innerHTML = DOMPurify.sanitize(html);
+        el.classList.add('md-ready');
+      } catch (e) {
+        el.textContent = txt;
+      }
+      if (window.renderMath) window.renderMath(el);
+    };
+    // whenLibsReady -> 等 marked/DOMPurify 就绪再回调
+    window.whenLibsReady = function (fn) {
+      if (window.marked && window.DOMPurify) { fn(); return; }
+      var n = 0;
+      var tmr = setInterval(function () {
+        n += 1;
+        if ((window.marked && window.DOMPurify) || n > 40) {
+          clearInterval(tmr);
+          fn();
+        }
+      }, 50);
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script>window.UI_I18N = {{ ui | tojson }};</script>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="{{ url_for('home') }}">{{ t('brand') }}</a>
+      <nav>
+        <a href="{{ url_for('home') }}">{{ t('nav_home') }}</a>
+        <a href="{{ url_for('chat') }}">{{ t('nav_chat') }}</a>
+        <a href="{{ url_for('information') }}">{{ t('nav_info') }}</a>
+        {% if session.get('user_id') %}
+        <a href="{{ url_for('logout') }}">{{ t('nav_logout') }}</a>
+        {% else %}
+        <a href="{{ url_for('login') }}">{{ t('nav_login') }}</a>
+        <a href="{{ url_for('register') }}">{{ t('nav_register') }}</a>
+        {% endif %}
+      </nav>
+    </aside>
+    <main class="main">
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <ul class="flashes">{% for m in messages %}<li>{{ m }}</li>{% endfor %}</ul>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

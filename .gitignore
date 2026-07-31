@@ -1,0 +1,25 @@
+# secrets / env
+.env
+*.db
+
+# python / venv
+venv/
+.venv-wsl/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# logs / OS
+*.log
+flask_*.log
+.DS_Store
+
+# eval & scale-run (代码 + 产物)
+eval_runs/
+batch_eval.py
+evaluate.py
+eval_rubric.py
+eval_scenarios.py
+
+# 本地杂项
+*.docx

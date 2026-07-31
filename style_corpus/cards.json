@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "note": "Injectable style cards only — craft traits, not full poems. Imitate breath/structure; never copy themes or lines.",
+  "cards": [
+    {
+      "id": "user_ref_cluster",
+      "lang": "zh",
+      "source": "诗.docx",
+      "breath": "short-long alternating; many 2-6 char lines; occasional long cascade",
+      "image_clusters": ["光影", "星月", "黑暗", "时间之河", "心脏/脉搏", "梦乡", "窗门内外"],
+      "verb_mode": "状态与象征动词并用：眺望/注视/流淌/纠缠/坠落/饮下",
+      "devices": ["设问收束", "祈使爆发留在高潮", "人儿呦式称呼偶用", "古典碎句点染"],
+      "bans_observed": ["不是而是", "本身", "清单式张力词堆砌"],
+      "prompt_snippet": "短行呼吸；同一光影/房间场内层递（夕阳→星→月→心脏）；intent标钩子类型；禁跨场词表与同义反复。",
+      "prompt_snippet_en": "Short breath; stay in one light/room field (sun→star→moon→heart); tag hook type in intent; no cross-field salad or synonym doubles."
+    },
+    {
+      "id": "misty_montage",
+      "lang": "zh",
+      "source": "朦胧诗蒙太奇 + 唐诗并置脱节（分析摘要）",
+      "breath": "短行跳跃；意象撞击后留白",
+      "image_clusters": ["对立象征群", "自然正面 vs 锈蚀否定物"],
+      "verb_mode": "精炼、少解释，靠并置出张力",
+      "devices": ["异质意象并置但同情绪公式", "瞬间感受捕捉", "时空打断"],
+      "bans_observed": ["散文说理", "情绪标签句", "无公式的跨场乱接"],
+      "prompt_snippet": "蒙太奇并置可以无语法粘合，但双方须共享情绪公式（如乡思/怀疑）；禁无场乱接的伪蒙太奇。",
+      "prompt_snippet_en": "Montage may drop grammar, but images must share one emotion-formula; ban fake montage across unrelated fields."
+    },
+    {
+      "id": "fairy_clear",
+      "lang": "zh",
+      "source": "顾城式童话透明意象（分析摘要）",
+      "breath": "轻、短、通透",
+      "image_clusters": ["自然细物", "幻想与现实交界"],
+      "verb_mode": "轻触、观察，少暴力动词",
+      "devices": ["幻想交织现实", "单一意象多次折射"],
+      "bans_observed": ["口号", "血腥张力词清单"],
+      "prompt_snippet": "意象透明如童话观察：幻想与现实交界处轻轻落笔，忌口号与暴力词表填空。",
+      "prompt_snippet_en": "Fairy-clear observation at fantasy/reality edge; soft verbs; no slogan or violence-word checklists."
+    },
+    {
+      "id": "ritual_land",
+      "lang": "zh",
+      "source": "海子式大地/仪式短句（分析摘要）",
+      "breath": "短句排比可有，但需变奏避免同构连发",
+      "image_clusters": ["土地", "麦地", "太阳", "村庄", "河流"],
+      "verb_mode": "仪式感命名与动作",
+      "devices": ["日常经验神话化", "生命极限抒情"],
+      "bans_observed": ["无变奏的机械排比"],
+      "prompt_snippet": "大地与日常可神话化；短句可排比但必须变奏，禁止机械同构连发。",
+      "prompt_snippet_en": "Mythologize land/daily life; parallel lines must vary—no mechanical identical scaffolds."
+    },
+    {
+      "id": "tang_breath",
+      "lang": "zh",
+      "source": "近体诗节奏感（分析摘要，非格律硬套）",
+      "breath": "四/五/七言尺度的呼吸参考，自由诗可借其顿挫",
+      "image_clusters": ["月", "江", "关山", "雁"],
+      "verb_mode": "单字动词有力",
+      "devices": ["景→情层递", "对仗意而不硬对"],
+      "bans_observed": ["堆砌典故说明书"],
+      "prompt_snippet": "借近体顿挫与景情层递，不硬填格律；单字动词有力，忌典故说明书。",
+      "prompt_snippet_en": "Borrow classical breath and scene-to-feeling layering without forced meter; strong verbs; no allusion lectures."
+    },
+    {
+      "id": "en_imagist",
+      "lang": "en",
+      "source": "Imagist / concise modern lyric traits",
+      "breath": "short lines; concrete nouns; cut abstract sermon",
+      "image_clusters": ["weather", "room objects", "body", "street light"],
+      "verb_mode": "exact physical verbs",
+      "devices": ["show not tell", "one turn near the end"],
+      "bans_observed": ["not-but", "itself emphasis", "thesaurus stacking"],
+      "prompt_snippet": "Imagist clarity: concrete nouns, exact verbs, one late turn; no not-but or itself-crutches.",
+      "prompt_snippet_en": "Imagist clarity: concrete nouns, exact verbs, one late turn; no not-but or itself-crutches."
+    },
+    {
+      "id": "en_breath_confessional",
+      "lang": "en",
+      "source": "modern confessional breath (craft summary)",
+      "breath": "uneven line lengths; questions allowed; climax imperative rare",
+      "image_clusters": ["window", "pulse", "night road", "water"],
+      "verb_mode": "looking / waiting / spilling",
+      "devices": ["address a you", "memory flash"],
+      "bans_observed": ["therapy-speak", "slogan couplets"],
+      "prompt_snippet": "Uneven breath; address a you; memory flashes; avoid therapy-speak and slogan couplets.",
+      "prompt_snippet_en": "Uneven breath; address a you; memory flashes; avoid therapy-speak and slogan couplets."
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block title %}{{ t('home_title') }}{% endblock %}
+{% block content %}
+<section class="hero hero-compact">
+  <div class="hero-top">
+    <h1 class="brand-hero">{{ t('brand') }}</h1>
+    <form class="lang-switch" method="post" action="{{ url_for('set_language') }}">
+      <input type="hidden" name="next" value="{{ url_for('home') }}">
+      <label>
+        <span class="sr-only">{{ t('lang_label') }}</span>
+        <select name="lang" onchange="this.form.submit()">
+          {% for code, label in langs.items() %}
+          <option value="{{ code }}" {% if code == lang %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </form>
+  </div>
+  <p class="lede">{{ t('home_lede') }}</p>
+  <div class="cta-row">
+    {% if user_id %}
+    <a class="btn" href="{{ url_for('chat') }}">{{ t('home_start') }}</a>
+    {% else %}
+    <a class="btn" href="{{ url_for('register') }}">{{ t('home_begin') }}</a>
+    <a class="btn ghost" href="{{ url_for('login') }}">{{ t('nav_login') }}</a>
+    {% endif %}
+  </div>
+</section>
+{% if error %}<p class="warn">{{ error }}</p>{% endif %}
+<section class="wall">
+  <h2>{{ t('home_public') }}</h2>
+  {% if poems %}
+  <div class="poem-wall">
+    {% for p in poems %}
+    <article class="poem-item">
+      <div class="poem-meta-row">
+        <strong>{{ p.title or t('home_untitled') }}</strong>
+        <span class="meta">{{ p.username }}</span>
+      </div>
+      <pre class="poem-body latex-ready">{{ p.poem_content or '' }}</pre>
+      {% if user_id %}
+      <form method="post" action="{{ url_for('extend', session_id=p.id) }}">
+        <button type="submit" class="text-btn">{{ t('home_derive') }}</button>
+      </form>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">{{ t('home_empty') }}</p>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>window.renderMath && window.renderMath(document.body);</script>
+{% endblock %}

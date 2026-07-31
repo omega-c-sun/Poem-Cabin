@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}{{ t('register_title') }}{% endblock %}
+{% block content %}
+<section class="form-panel">
+  <h1>{{ t('register_h1') }}</h1>
+  <form method="post">
+    <label>{{ t('login_user') }}
+      <input name="username" required>
+    </label>
+    <label>{{ t('login_pass') }}
+      <input type="password" name="password" required>
+    </label>
+    <button type="submit">{{ t('register_submit') }}</button>
+  </form>
+</section>
+{% endblock %}

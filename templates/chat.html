@@ -1,0 +1,121 @@
+{% extends 'base.html' %}
+{% block title %}{{ t('chat_title') }}{% endblock %}
+{% block body_class %}chat-body{% endblock %}
+{% block content %}
+<section class="gpt-shell" id="gpt-shell"
+  data-stage="{{ stage }}"
+  data-agency="{{ agency }}"
+  data-session="{{ session_id }}"
+  data-run-status="{{ run_status }}"
+  data-checkpoint="{{ checkpoint_id or '' }}"
+  data-scores='{{ current_scores | tojson }}'
+  data-poem={{ poem_text | tojson }}
+  data-canvas='{{ canvas | tojson }}'
+  data-examples='{{ examples_payload | tojson }}'>
+
+  <aside class="session-rail" id="session-rail">
+    <button type="button" class="session-new" id="session-new">{{ t('chat_new') }}</button>
+    <ul class="session-list" id="session-list">
+      {% for s in sessions %}
+      <li class="session-item {% if session_id and s.id|string == session_id %}on{% endif %}"
+          data-id="{{ s.id }}">
+        <span class="session-title">{{ s.title or t('home_untitled') }}</span>
+        <span class="session-meta">{{ s.stage }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </aside>
+
+  <div class="gpt-main-col" id="gpt-main-col">
+    <div class="stage-rail {% if stage == 'chat' %}is-idle{% endif %}" id="stage-rail">
+      {% for key in ['chat','examples','structure','symbols','verbs','final'] %}
+      <span class="stage-dot {% if stage == key %}on{% endif %}" data-stage="{{ key }}">{{ ui.stages[key] }}</span>
+      {% endfor %}
+    </div>
+
+    <div class="gpt-center" id="gpt-center">
+      {% if db_error %}
+      <div class="db-banner" id="db-banner">数据库异常：{{ db_error }}</div>
+      {% endif %}
+      {% if not chat_log %}
+      <div class="empty-hero" id="empty-hero">
+        <h1>{{ t('chat_hello') }}</h1>
+      </div>
+      {% endif %}
+
+      <div class="gpt-stream" id="chat-stream"></div>
+      <script id="chat-log-data" type="application/json">{{ chat_log | tojson }}</script>
+
+      <div class="examples-panel is-hidden" id="examples-panel"></div>
+
+      <div class="live-panel {% if not current and not (canvas and canvas.get('lines')) %}is-hidden{% endif %}" id="live-panel">
+        <div class="intent-line" id="intent-line">{{ current.ai_thought if current else '' }}</div>
+        <div class="poem-live" id="poem-live"></div>
+        <div class="process-rail" id="process-rail" aria-live="polite"></div>
+      </div>
+
+      {% if nodes %}
+      <details class="node-drawer" id="node-drawer">
+        <summary>{{ t('info_history') }}</summary>
+        <ul class="node-list">
+          {% for n in nodes[-12:] %}
+          <li>
+            <form method="post" action="{{ url_for('checkout', node_id=n.id) }}">
+              <button type="submit">{{ ui.stages.get(n.stage, n.stage) }} · {{ (n.ai_thought or '')[:40] }}</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+    </div>
+
+    <div class="composer-dock">
+      <div class="action-menu {% if not show_actions %}is-hidden{% endif %}" id="action-menu">
+        <button type="button" data-action="confirm">{{ t('chat_confirm') }}</button>
+        <button type="button" data-action="continue" id="continue-btn">{{ t('chat_continue') }}</button>
+        <button type="button" data-action="reject">{{ t('chat_reject') }}</button>
+        <button type="button" data-action="back">{{ t('chat_back') }}</button>
+        <button type="button" data-action="publish">{{ t('chat_publish') }}</button>
+        <button type="button" data-action="new">{{ t('chat_new') }}</button>
+        {% if agency == 'active' %}
+        <button type="button" id="toggle-dims">{{ t('chat_dims') }}</button>
+        {% endif %}
+      </div>
+
+      <div class="dims-sheet is-hidden" id="dims-sheet">
+        {% for key, label_key in [('rhyme','dim_rhyme'),('rhythm','dim_rhythm'),('tension','dim_tension'),('paradox','dim_paradox'),('metaphor','dim_metaphor'),('freshness','dim_freshness'),('depth','dim_depth')] %}
+        <label>{{ t(label_key) }}
+          <input type="range" name="{{ key }}" min="0" max="100" value="{{ slider_vals[key] }}">
+        </label>
+        {% endfor %}
+        <button type="button" id="save-dims">{{ t('chat_save_dims') }}</button>
+      </div>
+
+      <div class="attach-chips is-hidden" id="attach-chips"></div>
+
+      <form class="gpt-composer" id="composer" autocomplete="off">
+        <button type="button" class="icon-btn" id="plus-btn" title="+">+</button>
+        <button type="button" class="icon-btn" id="attach-btn" title="附件">📎</button>
+        <input type="file" id="file-input" class="file-input" multiple accept=".txt,.md,.text,.csv,.json,.log,text/plain">
+        <textarea id="message-input" name="message" rows="1" placeholder="{{ t('chat_placeholder') }}" autocomplete="off"></textarea>
+        <button type="button" class="stop-btn is-hidden" id="stop-btn" aria-label="stop">■</button>
+        <button type="submit" class="send-btn" id="send-btn" aria-label="send">↑</button>
+      </form>
+    </div>
+  </div>
+
+  <aside class="radar-dock" id="radar-dock">
+    <button type="button" class="radar-close" id="radar-close" aria-label="close">×</button>
+    <div class="radar-wrap">
+      <div id="radar" class="radar" data-scores='{{ current_scores | tojson }}'></div>
+    </div>
+  </aside>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/radar.js') }}?v=8a1"></script>
+<script src="{{ url_for('static', filename='js/morph.js') }}?v=8a1"></script>
+<script src="{{ url_for('static', filename='js/canvas_view.js') }}?v=8a1"></script>
+<script src="{{ url_for('static', filename='js/chat.js') }}?v=8a1"></script>
+{% endblock %}

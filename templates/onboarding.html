@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}{{ t('onboard_title') }}{% endblock %}
+{% block content %}
+<section class="form-panel">
+  <h1>{{ t('onboard_h1') }}</h1>
+  <p class="lede">{{ t('onboard_lede') }}</p>
+  <form method="post">
+    <label>{{ t('onboard_mood') }}
+      <select name="mood">
+        <option value="calm">{{ t('onboard_mood_calm') }}</option>
+        <option value="intense">{{ t('onboard_mood_intense') }}</option>
+        <option value="soft">{{ t('onboard_mood_soft') }}</option>
+      </select>
+    </label>
+    <label>{{ t('onboard_style') }}
+      <select name="style">
+        <option value="modern">{{ t('onboard_style_modern') }}</option>
+        <option value="classical">{{ t('onboard_style_classical') }}</option>
+        <option value="free">{{ t('onboard_style_free') }}</option>
+      </select>
+    </label>
+    <label>{{ t('onboard_control') }}
+      <select name="control">
+        <option value="guided">{{ t('onboard_control_guided') }}</option>
+        <option value="active">{{ t('onboard_control_active') }}</option>
+        <option value="passive">{{ t('onboard_control_passive') }}</option>
+      </select>
+    </label>
+    <label>{{ t('onboard_culture') }}
+      <select name="culture">
+        <option value="none">{{ t('onboard_culture_none') }}</option>
+        <option value="楚辞">楚辞</option>
+        <option value="唐诗">唐诗</option>
+        <option value="希腊神话">Greek myth</option>
+        <option value="当代都市">Contemporary city</option>
+      </select>
+    </label>
+    <button type="submit">{{ t('onboard_submit') }}</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,63 @@
+{
+  "note": "Association teaching cards from craft analysis + public-domain patterns. Never paste full copyrighted poems; relationships only.",
+  "sources": [
+    "唐诗并置脱节/蒙太奇（中国作家网理论文）",
+    "Pound imagist juxtaposition / superposition",
+    "Eliot objective correlative (Poetry Foundation)",
+    "用户 诗.docx 光影链与窗-人主体链"
+  ],
+  "positive_patterns": [
+    {
+      "id": "same_field_autumn",
+      "hook": "同场",
+      "emotion": "秋暮孤寂",
+      "chain": "枯藤→老树→昏鸦（同属村野黄昏场）",
+      "rule": "无连接词并置合法，因为共享场景场"
+    },
+    {
+      "id": "formula_wanderer",
+      "hook": "对照",
+      "emotion": "飘泊不定",
+      "chain": "浮云 || 游子（心物对照公式）",
+      "rule": "异质意象碰撞出第三义；须能回答共同情绪"
+    },
+    {
+      "id": "user_light_chain",
+      "hook": "同场+主体",
+      "emotion": "望而不得",
+      "chain": "夕阳→星空→启明星→月光→照不到的心脏",
+      "rule": "光影场内推移到身体；勿跳出到无关工业物"
+    },
+    {
+      "id": "user_window_you",
+      "hook": "主体连续",
+      "emotion": "靠近又躲闪",
+      "chain": "窗/玻璃→看你→钢笔敲纸→目光交汇→逃开又回望",
+      "rule": "同一关系主体贯穿；场景可换但主体链不断"
+    },
+    {
+      "id": "eliot_correlative",
+      "hook": "对照/同场",
+      "emotion": "具体情绪公式",
+      "chain": "一组外物处境 = 情绪的公式（不直说情绪词）",
+      "rule": "相邻意象互相加强同一情绪，不是破碎零件堆"
+    }
+  ],
+  "negative_patterns": [
+    {
+      "id": "cross_field_salad",
+      "bad": "霓虹→炉膛→锁扣→秤砣",
+      "why": "无共同场景场，也无共同情绪公式"
+    },
+    {
+      "id": "synonym_fake_progress",
+      "bad": "绕出绕过 / 渗向析出 / 肩线垂向",
+      "why": "同义反复冒充推进"
+    },
+    {
+      "id": "mood_label",
+      "bad": "我很孤独／情感真挚",
+      "why": "情绪标签代替物象链"
+    }
+  ]
+}

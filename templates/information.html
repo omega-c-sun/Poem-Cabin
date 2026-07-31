@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}{{ t('info_title') }}{% endblock %}
+{% block content %}
+<section class="info-layout">
+  <h1>{{ username }}{{ t('info_h1') }}</h1>
+  <div id="pref-radar" class="radar" data-scores='{{ weight_pct | tojson }}'></div>
+  <p class="meta">{{ t('info_agency') }}：{{ prefs.agency }}</p>
+
+  <h2>{{ t('info_report') }}</h2>
+  <article class="report" id="status-report">{{ report or '…' }}</article>
+
+  <h2>{{ t('info_history') }}</h2>
+  <ul class="tree">
+    {% for n in nodes %}
+    <li>
+      <strong>{{ n.session_title }}</strong>
+      <span class="stage-tag">{{ n.stage }}</span>
+      <pre>{{ (n.poem_content or '')[:180] }}</pre>
+    </li>
+    {% else %}
+    <li>{{ t('info_no_history') }}</li>
+    {% endfor %}
+  </ul>
+
+  <h2>{{ t('info_neg') }}</h2>
+  <ul>
+    {% for item in prefs.negative_feedback_history %}
+    <li>{{ item.summary }}</li>
+    {% else %}
+    <li>{{ t('info_none') }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/radar.js') }}?v=8a1"></script>
+<script>
+// 拉取偏好报告文案填入 #status-report
+fetch('/api/status-report', {credentials:'same-origin'})
+  .then(function (r) { return r.json(); })
+  .then(function (d) {
+    var el = document.getElementById('status-report');
+    if (el) el.textContent = d.report || '';
+  })
+  .catch(function () {});
+</script>
+{% endblock %}
